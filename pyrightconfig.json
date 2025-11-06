@@ -1,0 +1,20 @@
+{
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": false,
+  "reportOptionalCall": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportOptionalOperand": "none",
+  "reportCallIssue": "warning",
+  "reportArgumentType": "warning",
+  "reportAttributeAccessIssue": "warning",
+  "reportOperatorIssue": "warning",
+  "pythonVersion": "3.11",
+  "exclude": [
+    "**/__pycache__",
+    "**/.venv",
+    "**/venv",
+    "**/node_modules"
+  ],
+  "typeCheckingMode": "basic"
+}
+
