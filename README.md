@@ -8,7 +8,6 @@ A comprehensive sentiment analysis application with **transformer-based models**
 - **Transformer Model**: RoBERTa-base sentiment analysis (state-of-the-art accuracy)
 - **Automatic Fallback**: Uses joblib model if transformer unavailable
 - **Advanced Visualizations**: Word clouds, time-series charts, confidence scores
-- **RESTful API**: FastAPI server for programmatic access
 - **Progress Tracking**: Real-time progress bars for batch operations
 - **Export Results**: Download analysis as CSV
 
@@ -26,36 +25,21 @@ python -m venv .venv
 # Install dependencies
 pip install -r requirements.txt
 
-# Train model with included data
-python train_model.py --input data/training_data.csv
-
 # Run Streamlit app
 streamlit run app.py
 ```
 
 App opens at `http://localhost:8501`
 
-### API Server
-
-```bash
-# In another terminal
-uvicorn api:app --reload --port 8000
-```
-
-API docs: `http://localhost:8000/docs`
-
 ## 📁 Project Structure
 
 ```
-├── app.py                 # Streamlit application
-├── api.py                 # FastAPI REST API
-├── train_model.py         # Model training script
-├── model.joblib           # Trained XGBoost model
-├── data/
-│   └── training_data.csv  # Training dataset
-├── IMPROVEMENTS.md        # Future enhancements
+├── app.py                 # Streamlit application (main file)
+├── requirements.txt       # Python dependencies
+├── README.md              # Documentation
 ├── README-deploy.md       # Deployment guide
-└── requirements.txt       # Dependencies
+└── .streamlit/
+    └── config.toml        # Streamlit configuration
 ```
 
 ## 📚 Documentation
@@ -72,19 +56,6 @@ API docs: `http://localhost:8000/docs`
 - Enter text manually
 - View word clouds and time-series charts
 - Download results
-
-### API Usage
-```bash
-# Single text analysis
-curl -X POST "http://localhost:8000/analyze" \
-  -H "Content-Type: application/json" \
-  -d '{"text": "I love this product!"}'
-
-# Batch analysis
-curl -X POST "http://localhost:8000/batch" \
-  -H "Content-Type: application/json" \
-  -d '{"texts": ["Great!", "Terrible!", "OK"]}'
-```
 
 ## 🚀 Deployment & Hosting
 

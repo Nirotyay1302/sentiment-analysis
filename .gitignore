@@ -39,8 +39,8 @@ env/
 # Streamlit
 .streamlit/secrets.toml
 
-# Model files (optional - uncomment if you don't want to commit models)
-# model.joblib
+# Model files (using transformer model instead)
+model.joblib
 
 # OS
 .DS_Store
@@ -52,3 +52,15 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+
+# Local development scripts
+run_app.bat
+run_app.ps1
+
+# Type checking configs (dev only)
+pyproject.toml
+pyrightconfig.json
+
+# Training data and scripts
+train_model.py
+data/
