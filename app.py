@@ -13,10 +13,22 @@ from collections import Counter
 import numpy as np
 
 # Try to import snscrape (optional - may not work on all platforms)
-try:
-    import snscrape.modules.twitter as sntwitter
-    SNSCRAPE_AVAILABLE = True
-except (ImportError, Exception):
+# Note: snscrape is archived and incompatible with Python 3.13+
+# Default to False - will be set to True only if import succeeds
+SNSCRAPE_AVAILABLE = False
+sntwitter = None
+
+# Only attempt import if not on Streamlit Cloud (Python 3.13+)
+import sys
+if sys.version_info < (3, 13):
+    try:
+        import snscrape.modules.twitter as sntwitter  # type: ignore
+        SNSCRAPE_AVAILABLE = True
+    except Exception:
+        SNSCRAPE_AVAILABLE = False
+        sntwitter = None
+else:
+    # Python 3.13+ - snscrape is known to be incompatible
     SNSCRAPE_AVAILABLE = False
     sntwitter = None
 
