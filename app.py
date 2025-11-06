@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import joblib
-import snscrape.modules.twitter as sntwitter
-from youtube_comment_downloader import YoutubeCommentDownloader
 import os
 import platform
 import re
@@ -13,6 +11,22 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 from collections import Counter
 import numpy as np
+
+# Try to import snscrape (optional - may not work on all platforms)
+try:
+    import snscrape.modules.twitter as sntwitter
+    SNSCRAPE_AVAILABLE = True
+except (ImportError, Exception):
+    SNSCRAPE_AVAILABLE = False
+    sntwitter = None
+
+# Try to import youtube_comment_downloader (optional)
+try:
+    from youtube_comment_downloader import YoutubeCommentDownloader
+    YOUTUBE_DL_AVAILABLE = True
+except (ImportError, Exception):
+    YOUTUBE_DL_AVAILABLE = False
+    YoutubeCommentDownloader = None
 
 # Try to import transformers for better sentiment analysis
 try:
@@ -450,10 +464,14 @@ def render_pie_chart(sentiment_counts, title="Sentiment Distribution", colors=No
             return
 
 def fetch_twitter_replies(url, limit=100):
+    """Fetch Twitter replies - requires snscrape library."""
+    if not SNSCRAPE_AVAILABLE:
+        return []
+    
     tweet_id = url.split("/")[-1]
     replies = []
     try:
-        for i, tweet in enumerate(sntwitter.TwitterSearchScraper(f'conversation_id:{tweet_id}').get_items()):
+        for i, tweet in enumerate(sntwitter.TwitterSearchScraper(f'conversation_id:{tweet_id}').get_items()):  # type: ignore
             if i >= limit:
                 break
             if tweet.inReplyToTweetId == int(tweet_id):  # type: ignore
@@ -463,10 +481,14 @@ def fetch_twitter_replies(url, limit=100):
     return replies
 
 def fetch_youtube_comments(url, limit=100):
-    downloader = YoutubeCommentDownloader()
+    """Fetch YouTube comments - requires youtube-comment-downloader library."""
+    if not YOUTUBE_DL_AVAILABLE:
+        return []
+    
     comments = []
     try:
-        for i, comment in enumerate(downloader.get_comments_from_url(url, sort_by=0)):
+        downloader = YoutubeCommentDownloader()  # type: ignore
+        for i, comment in enumerate(downloader.get_comments_from_url(url, sort_by=0)):  # type: ignore
             if i >= limit:
                 break
             comments.append(comment["text"])
@@ -769,6 +791,12 @@ if mode == "Analyze Dataset":
 
 # ----------- Mode 2: Social Media Analyzer (Twitter/YouTube) -----------
 elif mode == "Analyze Social Media Link":
+    # Show warnings if libraries aren't available
+    if not SNSCRAPE_AVAILABLE:
+        st.warning("⚠️ Twitter scraping is not available. The `snscrape` library may not be compatible with this platform.")
+    if not YOUTUBE_DL_AVAILABLE:
+        st.warning("⚠️ YouTube comment scraping is not available. The `youtube-comment-downloader` library may not be installed.")
+    
     link = st.text_input("Paste a Twitter or YouTube link:")
     if st.button("Fetch & Analyze"):
         # Ensure model is available before analysis
@@ -779,10 +807,16 @@ elif mode == "Analyze Social Media Link":
 
         # Twitter support
         if "twitter.com" in link:
+            if not SNSCRAPE_AVAILABLE:
+                st.error("Twitter scraping is not available on this platform. Please use 'Analyze Dataset' or 'Manual Text Input' modes instead.")
+                st.stop()
             comments = fetch_twitter_replies(link, limit=100)
 
         # YouTube support
         elif "youtube.com" in link or "youtu.be" in link:
+            if not YOUTUBE_DL_AVAILABLE:
+                st.error("YouTube comment scraping is not available. Please use 'Analyze Dataset' or 'Manual Text Input' modes instead.")
+                st.stop()
             comments = fetch_youtube_comments(link, limit=100)
 
         if comments:

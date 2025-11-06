@@ -2,8 +2,6 @@ streamlit
 pandas
 joblib
 scikit-learn
-snscrape
-youtube-comment-downloader
 textblob
 plotly
 matplotlib
@@ -15,5 +13,8 @@ uvicorn
 python-multipart
 transformers>=4.30.0
 torch>=2.0.0
+# Optional dependencies (may not work on all platforms)
+# snscrape  # Twitter scraping - archived library, may not work on Python 3.13+
+# youtube-comment-downloader  # YouTube scraping - may have compatibility issues
 
 
