@@ -46,37 +46,7 @@ Complete guide for deploying the Sentiment Analysis App to various platforms.
 
 ---
 
-## Option 2: Docker Deployment
-
-### Build and Run Locally
-
-```bash
-# Build Docker image
-docker build -t sentiment-app:latest .
-
-# Run container
-docker run -p 8501:8501 sentiment-app:latest
-```
-
-### Deploy to Cloud Platforms
-
-#### Docker Hub
-```bash
-# Tag image
-docker tag sentiment-app:latest YOUR_DOCKERHUB_USERNAME/sentiment-app:latest
-
-# Push to Docker Hub
-docker push YOUR_DOCKERHUB_USERNAME/sentiment-app:latest
-```
-
-#### AWS ECS / Google Cloud Run / Azure Container Instances
-- Use the Docker image with any container platform
-- Set port mapping to 8501
-- Configure environment variables if needed
-
----
-
-## Option 3: Traditional VPS/Cloud VM
+## Option 2: Traditional VPS/Cloud VM
 
 ### Requirements
 - Ubuntu/Debian server (or similar)
@@ -151,31 +121,7 @@ server {
 
 ---
 
-## Option 4: Heroku
-
-### Prerequisites
-- Heroku CLI installed
-- Heroku account
-
-### Steps
-
-1. **Create `Procfile`**
-   ```
-   web: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
-   ```
-
-2. **Deploy**
-   ```bash
-   heroku create your-app-name
-   git push heroku main
-   heroku open
-   ```
-
-**Note**: Heroku free tier discontinued. Consider paid tier or alternatives.
-
----
-
-## Option 5: Railway
+## Option 3: Railway
 
 1. Go to [railway.app](https://railway.app)
 2. Click "New Project"
@@ -255,9 +201,6 @@ For issues:
 ```bash
 # Streamlit Community Cloud (just push to GitHub)
 git push origin main
-
-# Docker
-docker build -t sentiment-app . && docker run -p 8501:8501 sentiment-app
 
 # Local
 streamlit run app.py

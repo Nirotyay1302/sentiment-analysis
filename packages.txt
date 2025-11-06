@@ -1,4 +1,0 @@
-# System packages required for the app
-# This file is used by Streamlit Community Cloud for system dependencies
-# Note: Most Python packages are in requirements.txt
-
