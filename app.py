@@ -14,23 +14,25 @@ import numpy as np
 
 # Try to import snscrape (optional - may not work on all platforms)
 # Note: snscrape is archived and incompatible with Python 3.13+
-# Default to False - will be set to True only if import succeeds
+# Completely disabled on Python 3.13+ (Streamlit Cloud uses Python 3.13)
+import sys
 SNSCRAPE_AVAILABLE = False
 sntwitter = None
 
-# Only attempt import if not on Streamlit Cloud (Python 3.13+)
-import sys
+# Only attempt import on Python < 3.13 (snscrape doesn't work on 3.13+)
 if sys.version_info < (3, 13):
     try:
-        import snscrape.modules.twitter as sntwitter  # type: ignore
-        SNSCRAPE_AVAILABLE = True
+        # Use importlib to avoid module-level import issues
+        import importlib.util
+        spec = importlib.util.find_spec("snscrape.modules.twitter")
+        if spec is not None:
+            sntwitter = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(sntwitter)  # type: ignore
+            SNSCRAPE_AVAILABLE = True
     except Exception:
+        # Any error means snscrape is not available
         SNSCRAPE_AVAILABLE = False
         sntwitter = None
-else:
-    # Python 3.13+ - snscrape is known to be incompatible
-    SNSCRAPE_AVAILABLE = False
-    sntwitter = None
 
 # Try to import youtube_comment_downloader (optional)
 try:
