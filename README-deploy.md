@@ -1,6 +1,6 @@
 # 🚀 Deployment Guide
 
-This guide covers multiple deployment options for the Sentiment Analysis App.
+Complete guide for deploying the Sentiment Analysis App to various platforms.
 
 ## Option 1: Streamlit Community Cloud (Recommended - Easiest) ⭐
 

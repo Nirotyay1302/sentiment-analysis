@@ -1,11 +1,12 @@
 # 📊 Sentiment Analysis App
 
-A comprehensive sentiment analysis application with XGBoost models, word clouds, time-series analysis, and RESTful API.
+A comprehensive sentiment analysis application with **transformer-based models** (RoBERTa), word clouds, time-series analysis, and RESTful API.
 
 ## ✨ Features
 
 - **Three Analysis Modes**: Dataset, Social Media (Twitter/YouTube), Manual Input
-- **XGBoost Classifier**: State-of-the-art ML model
+- **Transformer Model**: RoBERTa-base sentiment analysis (state-of-the-art accuracy)
+- **Automatic Fallback**: Uses joblib model if transformer unavailable
 - **Advanced Visualizations**: Word clouds, time-series charts, confidence scores
 - **RESTful API**: FastAPI server for programmatic access
 - **Progress Tracking**: Real-time progress bars for batch operations
@@ -122,9 +123,11 @@ See `README-deploy.md` for detailed guides on:
 ## 🧪 Model
 
 - **Primary Model**: RoBERTa-base Transformer (fine-tuned for Twitter sentiment)
+  - Automatically downloads on first use (~500MB)
+  - High accuracy for social media text
+  - Pre-trained on large datasets
 - **Fallback Model**: XGBoost/Logistic Regression (if transformer unavailable)
 - **Classes**: Positive, Neutral, Negative
-- **Accuracy**: High accuracy with transformer model (pre-trained on large datasets)
 - **Features**: Automatic model loading, confidence scores, probability breakdowns
 
 ## 🤝 Contributing
