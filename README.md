@@ -98,8 +98,22 @@ See `README-deploy.md` for detailed guides on:
   - High accuracy for social media text
   - Pre-trained on large datasets
 - **Fallback Model**: XGBoost/Logistic Regression (if transformer unavailable)
+  - Train your own model using `train_model.py`
+  - Test with `test_model.py`
 - **Classes**: Positive, Neutral, Negative
 - **Features**: Automatic model loading, confidence scores, probability breakdowns
+
+### Training Your Own Model
+
+```bash
+# Train a custom model
+python train_model.py
+
+# Run tests
+python test_model.py
+```
+
+See `TRAINING_RESULTS.md` for training details and test results.
 
 ## 🤝 Contributing
 
