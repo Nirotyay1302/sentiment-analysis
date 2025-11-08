@@ -61,19 +61,15 @@ App opens at `http://localhost:8501`
 
 ### Quick Deploy (Streamlit Community Cloud - Recommended)
 
-1. **Push to GitHub**
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-   git push -u origin main
-   ```
+Your repository is ready for deployment at: **https://github.com/Nirotyay1302/sentiment-analysis**
 
-2. **Deploy to Streamlit Cloud**
+1. **Deploy to Streamlit Cloud**
    - Go to [share.streamlit.io](https://share.streamlit.io)
    - Sign in with GitHub
-   - Click "New app" → Select your repo → Main file: `app.py`
+   - Click "New app"
+   - Repository: `Nirotyay1302/sentiment-analysis`
+   - Branch: `main`
+   - Main file: `app.py`
    - Click "Deploy!"
    - Your app will be live in 5-10 minutes!
 
@@ -82,6 +78,10 @@ App opens at `http://localhost:8501`
 - ✅ Free hosting
 - ✅ Auto-updates on git push
 - ✅ State-of-the-art transformer model
+
+### Detailed Deployment Guide
+
+See `DEPLOYMENT_GUIDE.md` for complete step-by-step instructions.
 
 ### Other Deployment Options
 

@@ -1,6 +1,3 @@
-# Streamlit configuration file
-# This file is used to configure Streamlit settings
-
 [server]
 headless = true
 port = 8501
@@ -9,7 +6,6 @@ enableXsrfProtection = true
 
 [browser]
 gatherUsageStats = false
-serverAddress = "localhost"
 
 [theme]
 primaryColor = "#0066cc"
@@ -17,4 +13,3 @@ backgroundColor = "#ffffff"
 secondaryBackgroundColor = "#f5f6fa"
 textColor = "#262730"
 font = "sans serif"
-
