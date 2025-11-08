@@ -61,6 +61,9 @@ run_app.ps1
 pyproject.toml
 pyrightconfig.json
 
-# Training data and scripts
-train_model.py
+# Training data (but keep scripts for documentation)
+# train_model.py  # Keep training script for reference
+# test_model.py   # Keep test script for reference
 data/
+*.csv
+*.tsv

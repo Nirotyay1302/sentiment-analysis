@@ -43,12 +43,16 @@ except (ImportError, Exception):
     YoutubeCommentDownloader = None
 
 # Try to import transformers for better sentiment analysis
+TRANSFORMERS_AVAILABLE = False
 try:
     from transformers import AutoTokenizer, AutoModelForSequenceClassification
     import torch
+    # Test if torch actually works (sometimes DLL issues on Windows)
+    _ = torch.__version__
     TRANSFORMERS_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception) as e:
     TRANSFORMERS_AVAILABLE = False
+    print(f"Transformers not available: {e}")
 
 # Try to import wordcloud and matplotlib for visualization
 try:
@@ -199,39 +203,131 @@ def _try_load_model(path="model.joblib"):
 
 def _load_transformer_model():
     """Load transformer-based sentiment model if available."""
-    if TRANSFORMERS_AVAILABLE:
-        try:
-            return TransformerSentimentModel()
-        except Exception as e:
-            # Don't use st.warning here as it may be called before Streamlit is initialized
-            print(f"Transformer model not available: {e}. Using fallback model.")
-            return None
-    return None
+    if not TRANSFORMERS_AVAILABLE:
+        print("WARNING: Transformers library not available. Install with: pip install transformers torch")
+        return None
+    
+    try:
+        print("Attempting to load transformer model (cardiffnlp/twitter-roberta-base-sentiment-latest)...")
+        print("   This may take a few minutes on first run (~500MB download)...")
+        model = TransformerSentimentModel()
+        print("SUCCESS: Transformer model loaded successfully!")
+        return model
+    except Exception as e:
+        # Don't use st.warning here as it may be called before Streamlit is initialized
+        import traceback
+        print(f"ERROR: Transformer model loading failed: {e}")
+        print(f"   Error details: {traceback.format_exc()}")
+        print("   Will try to use fallback model or TextBlob.")
+        return None
 
-# Initialize models lazily (transformer will be loaded on first use)
+# Initialize models - try transformer first, then fallback to joblib
 transformer_pipe = None
 pipe = _try_load_model()
 
+# Try to load transformer model at startup if available
+if TRANSFORMERS_AVAILABLE and transformer_pipe is None:
+    try:
+        print("Initializing transformer model at startup...")
+        transformer_pipe = _load_transformer_model()
+        if transformer_pipe is not None:
+            print("SUCCESS: Transformer model loaded successfully at startup!")
+    except Exception as e:
+        print(f"WARNING: Could not load transformer model at startup: {e}")
+        transformer_pipe = None
+
 # Use transformer model if available, otherwise use joblib model
-active_pipe = pipe
+if transformer_pipe is not None:
+    active_pipe = transformer_pipe
+elif pipe is not None:
+    active_pipe = pipe
+else:
+    active_pipe = None
 
 labels = {0: "Negative", 1: "Neutral", 2: "Positive"}
+
+def predict_sentiment(texts):
+    """Predict sentiment using available model or TextBlob fallback."""
+    if isinstance(texts, str):
+        texts = [texts]
+    
+    if active_pipe is not None:
+        # Use the loaded model (transformer or joblib)
+        return active_pipe.predict(texts)  # type: ignore
+    else:
+        # Fallback to TextBlob
+        results = []
+        for text in texts:
+            sentiment = analyze_sentiment_textblob(text)
+            # Convert TextBlob labels to numeric: Negative=0, Neutral=1, Positive=2
+            if sentiment == "Positive":
+                results.append(2)
+            elif sentiment == "Negative":
+                results.append(0)
+            else:
+                results.append(1)
+        return results
+
+def predict_proba_sentiment(texts):
+    """Predict sentiment probabilities using available model or TextBlob fallback."""
+    if isinstance(texts, str):
+        texts = [texts]
+    
+    if active_pipe is not None and hasattr(active_pipe, 'predict_proba'):
+        # Use the loaded model's predict_proba
+        return active_pipe.predict_proba(texts)  # type: ignore
+    elif transformer_pipe is not None and hasattr(transformer_pipe, 'predict_proba'):
+        return transformer_pipe.predict_proba(texts)
+    else:
+        # Fallback to TextBlob - estimate probabilities
+        results = []
+        for text in texts:
+            blob = TextBlob(text)
+            polarity = blob.sentiment.polarity  # type: ignore
+            # Convert polarity (-1 to 1) to probabilities
+            if polarity > 0.05:
+                # Positive
+                results.append([0.1, 0.2, 0.7])  # [Negative, Neutral, Positive]
+            elif polarity < -0.05:
+                # Negative
+                results.append([0.7, 0.2, 0.1])  # [Negative, Neutral, Positive]
+            else:
+                # Neutral
+                results.append([0.2, 0.6, 0.2])  # [Negative, Neutral, Positive]
+        return np.array(results)
 
 def ensure_model_ui():
     """In-UI helper: if no model loaded, prompt user to upload one."""
     global active_pipe, transformer_pipe, pipe
     
     # Try to load transformer model first (preferred, lazy loading)
-    if TRANSFORMERS_AVAILABLE and transformer_pipe is None:
-        try:
-            with st.spinner("Loading transformer model (first time may take a moment to download ~500MB)..."):
-                transformer_pipe = _load_transformer_model()
-                if transformer_pipe is not None:
-                    active_pipe = transformer_pipe
-                    st.success("✅ Transformer model loaded successfully!")
-                    return True
-        except Exception as e:
-            st.warning(f"Could not load transformer model: {e}")
+    if transformer_pipe is None:
+        # Always try to load transformer if available, even if TRANSFORMERS_AVAILABLE check failed earlier
+        if TRANSFORMERS_AVAILABLE:
+            try:
+                with st.spinner("Loading transformer model (first time may take a moment to download ~500MB)..."):
+                    transformer_pipe = _load_transformer_model()
+                    if transformer_pipe is not None:
+                        active_pipe = transformer_pipe
+                        st.success("✅ Transformer model loaded successfully!")
+                        return True
+                    else:
+                        st.info("⚠️ Transformer model could not be loaded. Will use TextBlob for sentiment analysis.")
+            except Exception as e:
+                st.warning(f"Could not load transformer model: {e}. Will use TextBlob for sentiment analysis.")
+        else:
+            # Try one more time to import transformers (in case it works now)
+            try:
+                from transformers import AutoTokenizer, AutoModelForSequenceClassification
+                import torch
+                with st.spinner("Loading transformer model (first time may take a moment to download ~500MB)..."):
+                    transformer_pipe = _load_transformer_model()
+                    if transformer_pipe is not None:
+                        active_pipe = transformer_pipe
+                        st.success("✅ Transformer model loaded successfully!")
+                        return True
+            except Exception:
+                st.info("ℹ️ Transformer model not available. Using TextBlob for sentiment analysis.")
     
     # If transformer model is available, we're good
     if transformer_pipe is not None:
@@ -243,8 +339,9 @@ def ensure_model_ui():
         active_pipe = pipe
         return True
     
-    # No model available - offer to upload joblib model
-    st.warning("No model found. Using transformer model (if available) or upload a trained model (model.joblib) below.")
+    # No model available - use TextBlob as fallback and show info
+    st.info("📊 Using TextBlob for sentiment analysis. For better accuracy, the transformer model will be loaded automatically when available.")
+    st.caption("Note: Transformer model requires ~500MB download on first use. If you have a trained model.joblib file, you can upload it below.")
     
     # Allow uploading joblib model as fallback
     uploaded = st.file_uploader("Upload model.joblib (optional, transformer model is preferred)", type=["joblib", "pkl"], key="model_uploader")
@@ -260,7 +357,8 @@ def ensure_model_ui():
             st.error(f"Failed to load uploaded model: {e}")
             return False
     
-    return False
+    # Return True even without model - we'll use TextBlob as fallback
+    return True
 
  # Health-check server using builtin http.server so hosting platforms can probe readiness
 ready_event = Event()
@@ -413,8 +511,8 @@ elif active_pipe is not None:
     st.sidebar.caption("Model type: Custom trained model<br>Features: TF-IDF + N-grams", unsafe_allow_html=True)
     st.sidebar.info("💡 **Tip:** Transformer model available for better accuracy!")
 else:
-    st.sidebar.warning("⚠️ No Model Loaded")
-    st.sidebar.caption("Loading transformer model or upload 'model.joblib'")
+    st.sidebar.info("📊 Using TextBlob")
+    st.sidebar.caption("Transformer model will load automatically<br>or upload 'model.joblib'", unsafe_allow_html=True)
 st.markdown("<h1 style='text-align: center; color: #0066cc; margin-bottom: 0.5em;'>📊 Social Media Sentiment Analyzer</h1>", unsafe_allow_html=True)
 
 def clean_text(text):
@@ -666,10 +764,8 @@ if mode == "Analyze Dataset":
             if analyze_full:
                 texts = df[text_col].astype(str).apply(clean_text).tolist()
                 
-                # Ensure model is loaded
-                if active_pipe is None:
-                    st.error("Model not loaded. Please ensure a model is available.")
-                    st.stop()
+                # Ensure model UI is set up (will try to load transformer)
+                ensure_model_ui()
                 
                 # Add progress bar
                 progress_bar = st.progress(0)
@@ -680,7 +776,7 @@ if mode == "Analyze Dataset":
                 preds = []
                 for i in range(0, len(texts), chunk_size):
                     chunk = texts[i:i+chunk_size]
-                    chunk_preds = active_pipe.predict(chunk)  # type: ignore
+                    chunk_preds = predict_sentiment(chunk)
                     preds.extend(chunk_preds)
                     
                     # Update progress
@@ -696,15 +792,13 @@ if mode == "Analyze Dataset":
                 result_df = df
                 st.success("Full dataset analysis complete")
             else:
-                # Ensure model is loaded
-                if active_pipe is None:
-                    st.error("Model not loaded. Please ensure a model is available.")
-                    st.stop()
+                # Ensure model UI is set up (will try to load transformer)
+                ensure_model_ui()
                 
                 # Use first N rows (deterministic) instead of random sampling
                 head_df = df.head(int(sample_size)).copy()
                 head_texts = head_df[text_col].astype(str).apply(clean_text).tolist()
-                head_preds = active_pipe.predict(head_texts)  # type: ignore
+                head_preds = predict_sentiment(head_texts)
                 head_df["Predicted"] = head_preds
                 head_df["Predicted_Label"] = head_df["Predicted"].map(labels)  # type: ignore
                 result_df = head_df
@@ -836,10 +930,8 @@ elif mode == "Analyze Social Media Link":
         if comments:
             cleaned_comments = [clean_text(c) for c in comments]
             
-            # Ensure model is loaded
-            if active_pipe is None:
-                st.error("Model not loaded. Please ensure a model is available.")
-                st.stop()
+            # Ensure model UI is set up (will try to load transformer)
+            ensure_model_ui()
             
             # Add progress bar for social media analysis
             progress_bar = st.progress(0)
@@ -850,7 +942,7 @@ elif mode == "Analyze Social Media Link":
             preds = []
             for i in range(0, len(cleaned_comments), chunk_size):
                 chunk = cleaned_comments[i:i+chunk_size]
-                chunk_preds = active_pipe.predict(chunk)  # type: ignore
+                chunk_preds = predict_sentiment(chunk)
                 preds.extend(chunk_preds)
                 
                 # Update progress
@@ -892,32 +984,16 @@ elif mode == "Analyze Social Media Link":
 
 # ----------- Mode 4: Manual Text Input -----------
 elif mode == "Manual Text Input":
-    # Ensure model is available before analysis
-    if not ensure_model_ui():
-        st.stop()
+    # Ensure model UI is set up (will try to load transformer)
+    ensure_model_ui()
 
     text = st.text_area("Enter text:")
     if st.button("Analyze Text"):
         if text.strip():
-            # Ensure model is loaded
-            if active_pipe is None:
-                st.error("Model not loaded. Please ensure a model is available.")
-                st.stop()
-            
             cleaned = clean_text(text)
             
-            # Get predictions and probabilities
-            if hasattr(active_pipe, 'predict_proba'):
-                probas = active_pipe.predict_proba([cleaned])[0]  # type: ignore
-            else:
-                # Fallback for transformer model if predict_proba format differs
-                if transformer_pipe is not None:
-                    probas = transformer_pipe.predict_proba([cleaned])[0]
-                else:
-                    # For models without predict_proba, use predict and estimate confidence
-                    pred = active_pipe.predict([cleaned])[0]  # type: ignore
-                    probas = np.array([0.33, 0.33, 0.34])  # Default uniform
-                    probas[pred] = 0.8  # Assign higher confidence to predicted class
+            # Get predictions and probabilities using helper function
+            probas = predict_proba_sentiment([cleaned])[0]
             
             pred = probas.argmax()
             confidence = probas.max() * 100
