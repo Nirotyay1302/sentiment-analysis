@@ -62,7 +62,19 @@ try:
 except ImportError:
     WORDCLOUD_AVAILABLE = False
 
-# (OCR support removed for simpler hosting; app no longer requires Tesseract)
+# Try to import OCR libraries for image text extraction
+OCR_AVAILABLE = False
+EasyOCR = None
+try:
+    import easyocr
+    from PIL import Image
+    import io
+    OCR_AVAILABLE = True
+    # Initialize EasyOCR reader (lazy loading - will initialize on first use)
+    ocr_reader = None
+except ImportError:
+    OCR_AVAILABLE = False
+    ocr_reader = None
 
 # Transformer-based sentiment analysis model wrapper
 class TransformerSentimentModel:
@@ -494,6 +506,7 @@ mode = st.sidebar.selectbox(
     [
         "Analyze Dataset",
         "Analyze Social Media Link",
+        "Analyze Image/Screenshot",
         "Manual Text Input"
     ],
     key="mode_selectbox"
@@ -513,6 +526,17 @@ elif active_pipe is not None:
 else:
     st.sidebar.info("📊 Using TextBlob")
     st.sidebar.caption("Transformer model will load automatically<br>or upload 'model.joblib'", unsafe_allow_html=True)
+
+# Add OCR Info section
+st.sidebar.markdown("---")
+st.sidebar.header("📸 OCR Status")
+if OCR_AVAILABLE:
+    st.sidebar.success("✅ OCR Available")
+    st.sidebar.caption("Image text extraction<br>enabled with EasyOCR", unsafe_allow_html=True)
+else:
+    st.sidebar.info("ℹ️ OCR Not Available")
+    st.sidebar.caption("Install: pip install easyocr Pillow")
+
 st.markdown("<h1 style='text-align: center; color: #0066cc; margin-bottom: 0.5em;'>📊 Social Media Sentiment Analyzer</h1>", unsafe_allow_html=True)
 
 def clean_text(text):
@@ -685,6 +709,62 @@ def get_top_keywords(texts, sentiment_label, n=10):
     # Count and return top N
     counter = Counter(words)
     return counter.most_common(n)
+
+def initialize_ocr_reader():
+    """Initialize EasyOCR reader (lazy loading to avoid slow startup)."""
+    global ocr_reader
+    if not OCR_AVAILABLE:
+        return None
+    if ocr_reader is None:
+        try:
+            # Initialize EasyOCR reader for English (GPU disabled for cloud compatibility)
+            # This will download models on first use (~100MB, takes 30-60 seconds)
+            ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+            return ocr_reader
+        except Exception as e:
+            print(f"Failed to initialize OCR reader: {e}")
+            return None
+    return ocr_reader
+
+def extract_text_from_image(image_file):
+    """
+    Extract text from an image using OCR.
+    
+    Args:
+        image_file: Uploaded image file (Streamlit UploadedFile)
+    
+    Returns:
+        List of extracted text strings
+    """
+    if not OCR_AVAILABLE:
+        return []
+    
+    try:
+        # Initialize OCR reader
+        reader = initialize_ocr_reader()
+        if reader is None:
+            return []
+        
+        # Read image
+        image = Image.open(image_file)
+        
+        # Convert to numpy array for EasyOCR (numpy already imported at top)
+        img_array = np.array(image)
+        
+        # Perform OCR
+        results = reader.readtext(img_array)
+        
+        # Extract text from results
+        extracted_texts = []
+        for (bbox, text, confidence) in results:
+            # Filter out low confidence results
+            if confidence > 0.3:  # Adjust threshold as needed
+                extracted_texts.append(text)
+        
+        return extracted_texts
+    except Exception as e:
+        st.error(f"Error extracting text from image: {e}")
+        return []
 
 # ----------- Mode 1: Dataset Analyzer -----------
 if mode == "Analyze Dataset":
@@ -1040,7 +1120,187 @@ elif mode == "Analyze Social Media Link":
         else:
             st.error("No comments found or could not fetch comments.")
 
-# (Screenshot / OCR mode removed for simplified hosting)
+# ----------- Mode 3: Image/Screenshot Analyzer -----------
+elif mode == "Analyze Image/Screenshot":
+    st.subheader("📸 Image & Screenshot Sentiment Analysis")
+    
+    # Check OCR availability
+    if not OCR_AVAILABLE:
+        st.error("""
+        **OCR (Optical Character Recognition) is not available.**
+        
+        **To enable OCR**:
+        1. Install required packages: `pip install easyocr Pillow`
+        2. Restart the app
+        
+        **Alternative**: Use 'Manual Text Input' mode to copy and paste text from images.
+        """)
+        st.stop()
+    
+    st.info("""
+    **📸 Upload an image or screenshot** containing text (comments, reviews, social media posts, etc.)
+    
+    **Supported formats**: PNG, JPG, JPEG, WEBP
+    **Best results**: Clear, high-contrast images with readable text
+    """)
+    
+    # Upload image
+    uploaded_image = st.file_uploader(
+        "Upload an image or screenshot",
+        type=["png", "jpg", "jpeg", "webp"],
+        key="image_uploader"
+    )
+    
+    if uploaded_image is not None:
+        # Display the uploaded image
+        st.markdown("### 📷 Uploaded Image")
+        image = Image.open(uploaded_image)
+        st.image(image, caption="Uploaded Image", use_container_width=True)
+        
+        # Extract text button
+        if st.button("Extract Text & Analyze Sentiment", key="extract_analyze_btn"):
+            # Ensure model is available
+            if not ensure_model_ui():
+                st.stop()
+            
+            # Extract text from image
+            with st.spinner("Extracting text from image using OCR (this may take 30-60 seconds on first use to download models)..."):
+                # Reset file pointer
+                uploaded_image.seek(0)
+                extracted_texts = extract_text_from_image(uploaded_image)
+            
+            if not extracted_texts:
+                st.warning("⚠️ No text could be extracted from the image. Please try:")
+                st.markdown("""
+                - Ensure the image is clear and text is readable
+                - Try a higher resolution image
+                - Check that the image contains visible text
+                - Use 'Manual Text Input' mode to type the text manually
+                """)
+            else:
+                # Display extracted text
+                st.markdown("### 📝 Extracted Text")
+                full_text = " ".join(extracted_texts)
+                
+                # Show individual text segments
+                with st.expander("View extracted text segments"):
+                    for i, text in enumerate(extracted_texts, 1):
+                        st.write(f"**Segment {i}**: {text}")
+                
+                # Show full combined text
+                st.text_area("Full extracted text:", value=full_text, height=150, key="extracted_text_display")
+                
+                # Analyze sentiment
+                if full_text.strip():
+                    st.markdown("### 📊 Sentiment Analysis Results")
+                    
+                    # Clean text
+                    cleaned_text = clean_text(full_text)
+                    
+                    if not cleaned_text.strip():
+                        st.warning("No valid text found after cleaning. Cannot analyze sentiment.")
+                    else:
+                        # Get predictions
+                        if active_pipe is not None:
+                            # Use model for prediction
+                            prediction = active_pipe.predict([cleaned_text])[0]  # type: ignore
+                            
+                            # Get probabilities if available
+                            if hasattr(active_pipe, 'predict_proba'):
+                                probas = active_pipe.predict_proba([cleaned_text])[0]  # type: ignore
+                            elif transformer_pipe is not None:
+                                probas = transformer_pipe.predict_proba([cleaned_text])[0]
+                            else:
+                                probas = np.array([0.33, 0.33, 0.34])
+                            
+                            sentiment_label = labels[prediction]  # type: ignore
+                            confidence = probas.max() * 100
+                            
+                            # Display results
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Sentiment", sentiment_label)
+                            with col2:
+                                st.metric("Confidence", f"{confidence:.1f}%")
+                            with col3:
+                                # Color code based on sentiment
+                                if sentiment_label == "Positive":
+                                    st.success("✅ Positive")
+                                elif sentiment_label == "Negative":
+                                    st.error("❌ Negative")
+                                else:
+                                    st.info("➖ Neutral")
+                            
+                            # Probability breakdown
+                            st.markdown("#### Probability Breakdown")
+                            prob_df = pd.DataFrame({
+                                "Sentiment": ["Negative", "Neutral", "Positive"],
+                                "Probability": [f"{probas[0]*100:.1f}%", f"{probas[1]*100:.1f}%", f"{probas[2]*100:.1f}%"]
+                            })
+                            st.dataframe(prob_df, use_container_width=True, hide_index=True)
+                            
+                            # Visual indicator
+                            if confidence > 80:
+                                st.success(f"✅ High confidence prediction ({confidence:.1f}%)")
+                            elif confidence > 60:
+                                st.info(f"⚠️ Moderate confidence prediction ({confidence:.1f}%)")
+                            else:
+                                st.warning(f"⚠️ Low confidence prediction ({confidence:.1f}%) - results may be unreliable")
+                            
+                            # Analyze individual segments if multiple
+                            if len(extracted_texts) > 1:
+                                st.markdown("---")
+                                st.markdown("### 📊 Individual Segment Analysis")
+                                
+                                segment_results = []
+                                for i, text_segment in enumerate(extracted_texts, 1):
+                                    cleaned_segment = clean_text(text_segment)
+                                    if cleaned_segment.strip():
+                                        seg_pred = active_pipe.predict([cleaned_segment])[0]  # type: ignore
+                                        seg_label = labels[seg_pred]  # type: ignore
+                                        segment_results.append({
+                                            "Segment": i,
+                                            "Text": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+                                            "Sentiment": seg_label
+                                        })
+                                
+                                if segment_results:
+                                    segment_df = pd.DataFrame(segment_results)
+                                    st.dataframe(segment_df, use_container_width=True, hide_index=True)
+                                    
+                                    # Segment sentiment distribution
+                                    st.markdown("#### Segment Sentiment Distribution")
+                                    seg_counts = segment_df["Sentiment"].value_counts()
+                                    if not seg_counts.empty:
+                                        st.bar_chart(seg_counts)
+                        else:
+                            # Fallback to TextBlob
+                            st.warning("Model not available. Using TextBlob for basic sentiment analysis.")
+                            sentiment = analyze_sentiment_textblob(cleaned_text)
+                            st.metric("Sentiment", sentiment)
+                
+                # Download results (only if analysis was performed)
+                if full_text.strip() and active_pipe is not None:
+                    st.markdown("---")
+                    st.markdown("### 💾 Download Results")
+                    try:
+                        results_data = {
+                            "extracted_text": [full_text],
+                            "sentiment": [sentiment_label],
+                            "confidence": [f"{confidence:.1f}%"]
+                        }
+                        results_df = pd.DataFrame(results_data)
+                        csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+                        st.download_button(
+                            "Download results as CSV",
+                            data=csv_bytes,
+                            file_name="image_sentiment_results.csv",
+                            mime="text/csv",
+                            key="download_image_results"
+                        )
+                    except NameError:
+                        # Variables not defined (analysis didn't complete)
+                        pass
 
 # ----------- Mode 4: Manual Text Input -----------
 elif mode == "Manual Text Input":

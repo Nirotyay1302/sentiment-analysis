@@ -4,11 +4,12 @@ A comprehensive sentiment analysis application with **transformer-based models**
 
 ## ✨ Features
 
-- **Three Analysis Modes**: Dataset, Social Media (Twitter/YouTube), Manual Input
+- **Four Analysis Modes**: Dataset, Social Media (Twitter/YouTube), Image/Screenshot, Manual Input
 - **Transformer Model**: RoBERTa-base sentiment analysis (state-of-the-art accuracy)
 - **Automatic Fallback**: Uses joblib model if transformer unavailable
 - **Advanced Visualizations**: Word clouds, time-series charts, confidence scores
 - **Progress Tracking**: Real-time progress bars for batch operations
+- **OCR Support**: Extract text from images and screenshots
 - **Export Results**: Download analysis as CSV
 
 ### 📱 Social Media Analysis
@@ -62,6 +63,7 @@ App opens at `http://localhost:8501`
 ### Streamlit UI
 - Upload CSV files with text data
 - Analyze social media links
+- Upload images/screenshots (OCR text extraction)
 - Enter text manually
 - View word clouds and time-series charts
 - Download results
