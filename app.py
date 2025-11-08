@@ -899,13 +899,47 @@ if mode == "Analyze Dataset":
 
 # ----------- Mode 2: Social Media Analyzer (Twitter/YouTube) -----------
 elif mode == "Analyze Social Media Link":
-    # Show warnings if libraries aren't available
-    if not SNSCRAPE_AVAILABLE:
-        st.warning("⚠️ Twitter scraping is not available. The `snscrape` library may not be compatible with this platform.")
-    if not YOUTUBE_DL_AVAILABLE:
-        st.warning("⚠️ YouTube comment scraping is not available. The `youtube-comment-downloader` library may not be installed.")
+    st.subheader("📱 Social Media Sentiment Analysis")
     
-    link = st.text_input("Paste a Twitter or YouTube link:")
+    # Informative message about social media scraping
+    st.info("""
+    **ℹ️ Note**: Social media scraping has limitations on cloud platforms due to API restrictions and library compatibility.
+    
+    **Alternative Options**:
+    - 📊 **Upload CSV**: Export social media data and upload as CSV (Recommended)
+    - 📝 **Manual Input**: Copy and paste text manually
+    - 🔗 **Use Dataset Mode**: Best for bulk analysis
+    """)
+    
+    # Show status of scraping libraries
+    col1, col2 = st.columns(2)
+    with col1:
+        if SNSCRAPE_AVAILABLE:
+            st.success("✅ Twitter scraping available")
+        else:
+            st.info("ℹ️ Twitter scraping not available (use CSV upload instead)")
+    
+    with col2:
+        if YOUTUBE_DL_AVAILABLE:
+            st.success("✅ YouTube scraping available")
+        else:
+            st.info("ℹ️ YouTube scraping not available (use CSV upload instead)")
+    
+    # Provide option to upload CSV as alternative
+    st.markdown("---")
+    st.markdown("### Option 1: Upload Social Media Data (CSV)")
+    st.markdown("Export your social media data (Twitter/YouTube comments) to CSV and upload here:")
+    uploaded_csv = st.file_uploader("Upload social media data (CSV)", type=["csv"], key="social_csv_uploader")
+    
+    if uploaded_csv is not None:
+        st.info("💡 Switch to 'Analyze Dataset' mode to analyze the uploaded CSV file.")
+        st.markdown("---")
+    
+    # Original link-based approach
+    st.markdown("### Option 2: Direct Link Analysis")
+    st.markdown("*Note: This feature may not work on all platforms due to API restrictions.*")
+    
+    link = st.text_input("Paste a Twitter or YouTube link (optional):")
     if st.button("Fetch & Analyze"):
         # Ensure model is available before analysis
         if not ensure_model_ui():
@@ -914,18 +948,44 @@ elif mode == "Analyze Social Media Link":
         comments = []
 
         # Twitter support
-        if "twitter.com" in link:
+        if "twitter.com" in link or "x.com" in link:
             if not SNSCRAPE_AVAILABLE:
-                st.error("Twitter scraping is not available on this platform. Please use 'Analyze Dataset' or 'Manual Text Input' modes instead.")
+                st.error("""
+                **Twitter scraping is not available on this platform.**
+                
+                **Recommended alternatives**:
+                1. **Export Twitter data**: Use Twitter's export feature or third-party tools
+                2. **Upload as CSV**: Switch to 'Analyze Dataset' mode and upload your CSV
+                3. **Manual input**: Copy and paste tweets manually in 'Manual Text Input' mode
+                
+                *Note: Twitter API restrictions and library compatibility issues prevent direct scraping on cloud platforms.*
+                """)
                 st.stop()
             comments = fetch_twitter_replies(link, limit=100)
 
         # YouTube support
         elif "youtube.com" in link or "youtu.be" in link:
             if not YOUTUBE_DL_AVAILABLE:
-                st.error("YouTube comment scraping is not available. Please use 'Analyze Dataset' or 'Manual Text Input' modes instead.")
+                st.error("""
+                **YouTube comment scraping is not available on this platform.**
+                
+                **Recommended alternatives**:
+                1. **Export comments**: Use YouTube Data API or browser extensions to export comments
+                2. **Upload as CSV**: Switch to 'Analyze Dataset' mode and upload your CSV
+                3. **Manual input**: Copy and paste comments manually in 'Manual Text Input' mode
+                
+                *Note: YouTube API restrictions prevent direct comment scraping on cloud platforms.*
+                """)
                 st.stop()
             comments = fetch_youtube_comments(link, limit=100)
+        
+        elif not link:
+            st.warning("Please provide a valid Twitter or YouTube link, or upload a CSV file above.")
+            st.stop()
+        
+        else:
+            st.error("Invalid link. Please provide a valid Twitter (twitter.com or x.com) or YouTube (youtube.com) link.")
+            st.stop()
 
         if comments:
             cleaned_comments = [clean_text(c) for c in comments]

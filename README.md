@@ -11,6 +11,15 @@ A comprehensive sentiment analysis application with **transformer-based models**
 - **Progress Tracking**: Real-time progress bars for batch operations
 - **Export Results**: Download analysis as CSV
 
+### 📱 Social Media Analysis
+
+**Note**: Direct social media scraping has limitations on cloud platforms. The app provides:
+- ✅ **CSV Upload**: Export social media data and upload as CSV (Recommended)
+- ✅ **Manual Input**: Copy and paste text for analysis
+- ✅ **Dataset Mode**: Best for bulk analysis
+
+See `SOCIAL_MEDIA_SCRAPING_GUIDE.md` for detailed instructions.
+
 ## 🚀 Quick Start
 
 ### Installation
