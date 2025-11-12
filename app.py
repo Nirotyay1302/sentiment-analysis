@@ -437,6 +437,93 @@ def get_model_classes(model):
     return None
 
 
+def is_numerical_column(series, threshold=0.8):
+    """
+    Check if a column is primarily numerical.
+    
+    Args:
+        series: pandas Series to check
+        threshold: Minimum proportion of numerical values to consider column as numerical
+    
+    Returns:
+        True if column is primarily numerical, False otherwise
+    """
+    if len(series) == 0:
+        return False
+    
+    # Convert to string and check
+    series_str = series.astype(str)
+    
+    # Count how many values are purely numerical (digits only, possibly with decimals)
+    numeric_count = 0
+    total_count = 0
+    
+    for val in series_str:
+        val_str = str(val).strip()
+        if val_str and val_str.lower() not in ['nan', 'none', 'null', '']:
+            total_count += 1
+            # Check if value is purely numerical (digits, decimal point, minus sign)
+            if re.match(r'^-?\d+\.?\d*$', val_str):
+                numeric_count += 1
+    
+    if total_count == 0:
+        return False
+    
+    # If more than threshold% are numerical, consider it a numerical column
+    return (numeric_count / total_count) >= threshold
+
+def detect_text_column(df, exclude_numerical=True):
+    """
+    Detect the best text column in a dataframe, excluding numerical columns.
+    
+    Args:
+        df: pandas DataFrame
+        exclude_numerical: If True, exclude columns that are primarily numerical
+    
+    Returns:
+        Name of the best text column, or None if not found
+    """
+    cols = list(df.columns)
+    detected_col = None
+    
+    # First, try to find column with 'text' in name
+    for c in cols:
+        if 'text' in str(c).lower() or 'comment' in str(c).lower() or 'review' in str(c).lower():
+            if not exclude_numerical or not is_numerical_column(df[c]):
+                detected_col = c
+                break
+    
+    # If not found, score columns by average string length (excluding numerical columns)
+    if detected_col is None:
+        scores = {}
+        for c in cols:
+            # Skip if numerical column
+            if exclude_numerical and is_numerical_column(df[c]):
+                continue
+            
+            try:
+                vals = df[c].astype(str).replace('nan', '').tolist()
+                # Calculate average length of non-empty, non-numerical values
+                lengths = []
+                for v in vals:
+                    v_str = str(v).strip()
+                    if v_str and v_str.lower() not in ['nan', 'none', 'null', '']:
+                        # Skip if purely numerical
+                        if not re.match(r'^-?\d+\.?\d*$', v_str):
+                            lengths.append(len(re.sub(r'[^A-Za-z0-9\s]', '', v_str).strip()))
+                
+                if lengths:
+                    scores[c] = sum(lengths) / len(lengths)
+                else:
+                    scores[c] = 0
+            except Exception:
+                scores[c] = 0
+        
+        if scores:
+            detected_col = max(scores, key=scores.get)  # type: ignore
+    
+    return detected_col
+
 def read_csv_with_header_detection(uploaded):
     """Read a CSV and try to detect if the real header is on a later row (common with exported CSVs that include a title row).
 
@@ -517,6 +604,7 @@ mode = st.sidebar.selectbox(
         "Analyze Dataset",
         "Analyze Social Media Link",
         "Analyze Image/Screenshot",
+        "Compare Two Datasets",
         "Accuracy Meter/Validation",
         "Manual Text Input"
     ],
@@ -550,10 +638,119 @@ else:
 
 st.markdown("<h1 style='text-align: center; color: #0066cc; margin-bottom: 0.5em;'>📊 Social Media Sentiment Analyzer</h1>", unsafe_allow_html=True)
 
+def is_numeric_only(text):
+    """Check if text contains only numbers and no meaningful text."""
+    if not text or pd.isna(text):
+        return True
+    
+    text_str = str(text).strip()
+    if not text_str:
+        return True
+    
+    # Remove whitespace and common punctuation
+    cleaned = re.sub(r'[\s.,!?\-_()\[\]{}]', '', text_str)
+    
+    # Check if it's all digits or mostly digits
+    if cleaned.isdigit():
+        return True
+    
+    # Check if it's mostly numbers (more than 80% digits)
+    if len(cleaned) > 0:
+        digit_ratio = sum(c.isdigit() for c in cleaned) / len(cleaned)
+        if digit_ratio > 0.8:
+            return True
+    
+    # Check if it's a very short string with mostly numbers
+    if len(text_str) <= 3 and any(c.isdigit() for c in text_str):
+        if sum(c.isdigit() for c in text_str) >= len(text_str) * 0.7:
+            return True
+    
+    return False
+
 def clean_text(text):
-    text = re.sub(r'[^A-Za-z0-9\s.,!?]', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    """Clean and preprocess text data, filtering out numeric-only content."""
+    if pd.isna(text) or text == "":
+        return ""
+    
+    text = str(text)
+    # Skip if text is purely numeric
+    if re.match(r'^[\d\s.,+-]+$', text.strip()):
+        return ""
+    
+def is_numeric_column(series, threshold=0.8):
+    """
+    Check if a column is primarily numeric.
+    
+    Args:
+        series: pandas Series to check
+        threshold: Minimum proportion of numeric values to consider column as numeric
+    
+    Returns:
+        True if column is primarily numeric, False otherwise
+    """
+    if len(series) == 0:
+        return False
+    
+    # Convert to string and check
+    series_str = series.astype(str)
+    
+    # Count numeric-like values (pure numbers, or numbers with minimal text)
+    numeric_count = 0
+    total_count = 0
+    
+    for val in series_str:
+        val_str = str(val).strip()
+        if val_str == '' or pd.isna(val):
+            continue
+        
+        total_count += 1
+        # Check if value is primarily numeric
+        # Remove common separators and check if remaining is mostly digits
+        cleaned = re.sub(r'[,\s$€£¥%]', '', val_str)
+        if cleaned == '':
+            continue
+        
+        # Check if it's a pure number or mostly numeric
+        if re.match(r'^[\d.+-]+$', cleaned) or (len(re.findall(r'\d', cleaned)) / max(len(cleaned), 1)) > 0.7:
+            numeric_count += 1
+    
+    if total_count == 0:
+        return False
+    
+    # If more than threshold% are numeric, consider it a numeric column
+    return (numeric_count / total_count) > threshold
+
+def filter_text_columns(df):
+    """
+    Filter out numeric columns and return only text columns suitable for sentiment analysis.
+    
+    Args:
+        df: pandas DataFrame
+    
+    Returns:
+        List of column names that are suitable for text analysis
+    """
+    text_columns = []
+    for col in df.columns:
+        # Skip if column is numeric type
+        if pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        
+        # Check if column contains primarily text (not numeric)
+        if not is_numeric_column(df[col]):
+            text_columns.append(col)
+    
+    return text_columns
+
+def analyze_sentiment_textblob(text):
+    blob = TextBlob(text)
+    polarity = blob.sentiment.polarity  # type: ignore
+    if polarity > 0.05:
+        return "Positive"
+    elif polarity < -0.05:
+        return "Negative"
+    else:
+        return "Neutral"
 
 def analyze_sentiment_textblob(text):
     blob = TextBlob(text)
@@ -940,31 +1137,40 @@ if mode == "Analyze Dataset":
 
         if df is not None:
             # Let the user pick which column contains the text to analyze
-            # Heuristic: prefer a column with 'text' in the name; otherwise pick the column with the highest average token length
+            # Use improved detection that excludes numerical columns
             cols = list(df.columns)
-            detected_col = None
-            for c in cols:
-                if 'text' in str(c).lower():
-                    detected_col = c
-                    break
-            if detected_col is None:
-                # score columns by average length of string values (ignoring empty cells)
-                scores = {}
-                for c in cols:
-                    try:
-                        vals = df[c].astype(str).replace('nan','').tolist()
-                        lengths = [len(re.sub(r'[^A-Za-z0-9\s]', '', v).strip()) for v in vals if v and v.strip()]
-                        scores[c] = sum(lengths)/len(lengths) if lengths else 0
-                    except Exception:
-                        scores[c] = 0
-                detected_col = max(scores, key=scores.get)  # type: ignore
-
-            text_col = st.selectbox("Select text column for sentiment analysis", options=cols, index=cols.index(detected_col))
-            # warn if the selected column looks mostly numeric or very short
+            detected_col = detect_text_column(df, exclude_numerical=True)
+            
+            # Filter out numerical columns from selection
+            non_numerical_cols = [c for c in cols if not is_numerical_column(df[c])]
+            
+            if not non_numerical_cols:
+                st.error("⚠️ No suitable text columns found. All columns appear to be numerical. Please ensure your dataset contains text data.")
+                st.stop()
+            
+            # Warn about numerical columns
+            numerical_cols = [c for c in cols if is_numerical_column(df[c])]
+            if numerical_cols:
+                st.info(f"ℹ️ Excluded {len(numerical_cols)} numerical column(s) from text analysis: {', '.join(numerical_cols[:5])}")
+            
+            # Select text column (default to detected, or first non-numerical)
+            if detected_col and detected_col in non_numerical_cols:
+                default_idx = non_numerical_cols.index(detected_col)
+            else:
+                default_idx = 0
+            
+            text_col = st.selectbox(
+                "Select text column for sentiment analysis (numerical columns excluded)",
+                options=non_numerical_cols,
+                index=default_idx,
+                key="dataset_text_col"
+            )
+            
+            # Validate selected column
             sample_vals = df[text_col].astype(str).head(20).tolist()
-            num_numeric = sum(1 for v in sample_vals if re.fullmatch(r"\s*\d+\s*", v))
+            num_numeric = sum(1 for v in sample_vals if re.fullmatch(r"^-?\d+\.?\d*$", str(v).strip()))
             if num_numeric > 5:
-                st.warning(f"The selected column '{text_col}' appears to contain many numeric or index-like values. If this is incorrect, pick a different column.")
+                st.warning(f"⚠️ The selected column '{text_col}' appears to contain many numerical values. Please verify this is the correct text column.")
             total_rows = len(df)
             st.write(f"Rows in dataset: **{total_rows}** — using column: **{text_col}**")
 
@@ -986,8 +1192,27 @@ if mode == "Analyze Dataset":
             if analyze_full:
                 texts = df[text_col].astype(str).apply(clean_text).tolist()
                 
+                # Filter out numeric-only and empty texts
+                valid_indices = []
+                filtered_count = 0
+                for i, text in enumerate(texts):
+                    if text.strip() and not is_numeric_only(text):
+                        valid_indices.append(i)
+                    else:
+                        filtered_count += 1
+                
+                if filtered_count > 0:
+                    st.info(f"ℹ️ Filtered out {filtered_count} numeric-only or empty entries (not suitable for sentiment analysis)")
+                
+                texts = [texts[i] for i in valid_indices]
+                df_filtered = df.iloc[valid_indices].copy() if valid_indices else df.copy()
+                
                 # Ensure model UI is set up (will try to load transformer)
                 ensure_model_ui()
+                
+                if len(texts) == 0:
+                    st.warning("⚠️ No valid text entries found after filtering. Please check your dataset.")
+                    st.stop()
                 
                 # Add progress bar
                 progress_bar = st.progress(0)
@@ -1009,10 +1234,10 @@ if mode == "Analyze Dataset":
                 progress_bar.empty()
                 status_text.empty()
                 
-                df["Predicted"] = preds
-                df["Predicted_Label"] = df["Predicted"].map(labels)  # type: ignore
-                result_df = df
-                st.success("Full dataset analysis complete")
+                df_filtered["Predicted"] = preds
+                df_filtered["Predicted_Label"] = df_filtered["Predicted"].map(labels)  # type: ignore
+                result_df = df_filtered
+                st.success(f"Full dataset analysis complete - {len(texts)} valid entries analyzed")
             else:
                 # Ensure model UI is set up (will try to load transformer)
                 ensure_model_ui()
@@ -1020,11 +1245,31 @@ if mode == "Analyze Dataset":
                 # Use first N rows (deterministic) instead of random sampling
                 head_df = df.head(int(sample_size)).copy()
                 head_texts = head_df[text_col].astype(str).apply(clean_text).tolist()
+                
+                # Filter out numeric-only and empty texts
+                valid_indices = []
+                filtered_count = 0
+                for i, text in enumerate(head_texts):
+                    if text.strip() and not is_numeric_only(text):
+                        valid_indices.append(i)
+                    else:
+                        filtered_count += 1
+                
+                if filtered_count > 0:
+                    st.info(f"ℹ️ Filtered out {filtered_count} numeric-only or empty entries (not suitable for sentiment analysis)")
+                
+                head_texts = [head_texts[i] for i in valid_indices]
+                head_df_filtered = head_df.iloc[valid_indices].copy() if valid_indices else head_df.copy()
+                
+                if len(head_texts) == 0:
+                    st.warning("⚠️ No valid text entries found after filtering. Please check your dataset.")
+                    st.stop()
+                
                 head_preds = predict_sentiment(head_texts)
-                head_df["Predicted"] = head_preds
-                head_df["Predicted_Label"] = head_df["Predicted"].map(labels)  # type: ignore
-                result_df = head_df
-                st.success(f"Quick scan (first {sample_size} rows) complete")
+                head_df_filtered["Predicted"] = head_preds
+                head_df_filtered["Predicted_Label"] = head_df_filtered["Predicted"].map(labels)  # type: ignore
+                result_df = head_df_filtered
+                st.success(f"Quick scan (first {sample_size} rows) complete - {len(head_texts)} valid entries analyzed")
 
             # Allow filtering by sentiment (based on text predictions)
             sentiment_choices = ["Positive", "Neutral", "Negative"]
@@ -1444,32 +1689,344 @@ elif mode == "Analyze Image/Screenshot":
                         # Variables not defined (analysis didn't complete)
                         pass
 
-# ----------- Mode 4: Accuracy Meter/Validation -----------
-elif mode == "Accuracy Meter/Validation":
-    st.subheader("📊 Accuracy Meter & Model Validation")
+# ----------- Mode 4: Compare Two Datasets -----------
+elif mode == "Compare Two Datasets":
+    st.subheader("🔄 Compare Two Datasets")
     
     st.info("""
-    **Compare predicted sentiments with actual labels to measure model accuracy.**
+    **Compare a labeled dataset (with declared sentiments) with an unlabeled dataset (non-declared).**
     
     **How it works**:
-    1. Upload a reference dataset with actual sentiment labels (Positive, Negative, Neutral)
-    2. The app will predict sentiments for the same dataset
-    3. Compare predictions with actual labels
-    4. View comprehensive accuracy metrics
+    1. Upload **Dataset 1**: Reference dataset with actual sentiment labels (declared)
+    2. Upload **Dataset 2**: Test dataset without labels (non-declared)
+    3. Match datasets (by row index or text similarity)
+    4. Predict sentiments for Dataset 2
+    5. Compare predictions with Dataset 1 labels
+    6. View accuracy metrics
     """)
     
     # Ensure model is available
     if not ensure_model_ui():
         st.stop()
     
-    st.markdown("### Step 1: Upload Reference Dataset")
-    st.markdown("Upload a CSV file with text and actual sentiment labels:")
+    st.markdown("---")
+    st.markdown("### Step 1: Upload Reference Dataset (With Labels)")
+    st.markdown("Upload a CSV file with text and **actual sentiment labels** (Positive, Negative, Neutral):")
     
     reference_file = st.file_uploader(
-        "Upload reference dataset (CSV with text and sentiment columns)",
+        "Upload reference dataset with labels (CSV)",
         type=["csv"],
-        key="accuracy_reference_uploader"
+        key="compare_reference_uploader"
     )
+    
+    st.markdown("---")
+    st.markdown("### Step 2: Upload Test Dataset (Without Labels)")
+    st.markdown("Upload a CSV file with text data **without sentiment labels**:")
+    
+    test_file = st.file_uploader(
+        "Upload test dataset without labels (CSV)",
+        type=["csv"],
+        key="compare_test_uploader"
+    )
+    
+    if reference_file is not None and test_file is not None:
+        # Read both datasets
+        df_ref, header_row_ref = read_csv_with_header_detection(reference_file)
+        df_test, header_row_test = read_csv_with_header_detection(test_file)
+        
+        if df_ref is None or df_test is None:
+            st.error("Could not parse one or both CSV files.")
+        else:
+            st.success(f"✅ Reference dataset: {len(df_ref)} rows | Test dataset: {len(df_test)} rows")
+            
+            # Detect columns for reference dataset
+            ref_cols = list(df_ref.columns)
+            ref_text_col = detect_text_column(df_ref, exclude_numerical=True)
+            ref_sentiment_col = None
+            for c in ref_cols:
+                if 'sentiment' in str(c).lower() or 'label' in str(c).lower():
+                    ref_sentiment_col = c
+                    break
+            
+            # Detect columns for test dataset
+            test_cols = list(df_test.columns)
+            test_text_col = detect_text_column(df_test, exclude_numerical=True)
+            
+            # Filter numerical columns
+            ref_non_num_cols = [c for c in ref_cols if not is_numerical_column(df_ref[c])]
+            test_non_num_cols = [c for c in test_cols if not is_numerical_column(df_test[c])]
+            
+            if not ref_non_num_cols or not test_non_num_cols:
+                st.error("⚠️ No suitable text columns found in one or both datasets. Please ensure datasets contain text data.")
+                st.stop()
+            
+            st.markdown("---")
+            st.markdown("### Step 3: Select Columns")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Reference Dataset (With Labels):**")
+                ref_text_col = st.selectbox(
+                    "Text column:",
+                    options=ref_non_num_cols,
+                    index=ref_non_num_cols.index(ref_text_col) if ref_text_col and ref_text_col in ref_non_num_cols else 0,
+                    key="compare_ref_text_col"
+                )
+                if ref_sentiment_col:
+                    ref_sentiment_col = st.selectbox(
+                        "Sentiment/Label column:",
+                        options=ref_cols,
+                        index=ref_cols.index(ref_sentiment_col),
+                        key="compare_ref_sentiment_col"
+                    )
+                else:
+                    ref_sentiment_col = st.selectbox(
+                        "Sentiment/Label column:",
+                        options=ref_cols,
+                        key="compare_ref_sentiment_col"
+                    )
+            
+            with col2:
+                st.markdown("**Test Dataset (Without Labels):**")
+                test_text_col = st.selectbox(
+                    "Text column:",
+                    options=test_non_num_cols,
+                    index=test_non_num_cols.index(test_text_col) if test_text_col and test_text_col in test_non_num_cols else 0,
+                    key="compare_test_text_col"
+                )
+            
+            # Show previews
+            st.markdown("---")
+            st.markdown("### Preview")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Reference Dataset:**")
+                st.dataframe(df_ref[[ref_text_col, ref_sentiment_col]].head(5))
+            
+            with col2:
+                st.markdown("**Test Dataset:**")
+                st.dataframe(df_test[[test_text_col]].head(5))
+            
+            # Matching method
+            st.markdown("---")
+            st.markdown("### Step 4: Select Matching Method")
+            match_method = st.radio(
+                "How to match datasets:",
+                ["By Row Index (same order)", "By Text Similarity (match similar texts)"],
+                key="match_method"
+            )
+            
+            if st.button("Compare Datasets & Calculate Accuracy", key="compare_datasets_btn"):
+                # Prepare data
+                ref_texts = df_ref[ref_text_col].astype(str).apply(clean_text).tolist()
+                ref_labels = df_ref[ref_sentiment_col].astype(str).str.strip().tolist()
+                
+                # Normalize labels
+                label_normalize = {
+                    "positive": "Positive", "negative": "Negative", "neutral": "Neutral",
+                    "POSITIVE": "Positive", "NEGATIVE": "Negative", "NEUTRAL": "Neutral"
+                }
+                ref_labels = [label_normalize.get(l, l) for l in ref_labels]
+                
+                test_texts = df_test[test_text_col].astype(str).apply(clean_text).tolist()
+                
+                # Match datasets
+                matched_ref_texts = []
+                matched_ref_labels = []
+                matched_test_texts = []
+                matched_indices = []
+                
+                if match_method == "By Row Index (same order)":
+                    # Match by index (assume same order)
+                    min_len = min(len(ref_texts), len(test_texts))
+                    matched_ref_texts = ref_texts[:min_len]
+                    matched_ref_labels = ref_labels[:min_len]
+                    matched_test_texts = test_texts[:min_len]
+                    matched_indices = list(range(min_len))
+                    
+                    if len(ref_texts) != len(test_texts):
+                        st.warning(f"⚠️ Datasets have different lengths. Comparing first {min_len} rows.")
+                else:
+                    # Match by text similarity
+                    with st.spinner("Matching texts by similarity..."):
+                        from difflib import SequenceMatcher
+                        
+                        for i, test_text in enumerate(test_texts):
+                            best_match_idx = -1
+                            best_similarity = 0.0
+                            
+                            for j, ref_text in enumerate(ref_texts):
+                                similarity = SequenceMatcher(None, test_text.lower(), ref_text.lower()).ratio()
+                                if similarity > best_similarity and similarity > 0.7:  # 70% similarity threshold
+                                    best_similarity = similarity
+                                    best_match_idx = j
+                            
+                            if best_match_idx >= 0:
+                                matched_test_texts.append(test_text)
+                                matched_ref_texts.append(ref_texts[best_match_idx])
+                                matched_ref_labels.append(ref_labels[best_match_idx])
+                                matched_indices.append((i, best_match_idx))
+                        
+                        if not matched_test_texts:
+                            st.error("❌ No matching texts found (similarity threshold: 70%). Try 'By Row Index' method instead.")
+                            st.stop()
+                        else:
+                            st.info(f"✅ Matched {len(matched_test_texts)} texts (similarity threshold: 70%)")
+                
+                if not matched_test_texts:
+                    st.error("No matched texts found. Please check your datasets.")
+                    st.stop()
+                
+                # Predict sentiments for test dataset
+                with st.spinner("Predicting sentiments for test dataset..."):
+                    if active_pipe is not None:
+                        predicted_numeric = active_pipe.predict(matched_test_texts)  # type: ignore
+                        predicted_labels = [labels[p] for p in predicted_numeric]  # type: ignore
+                    else:
+                        st.error("Model not available.")
+                        st.stop()
+                
+                # Calculate metrics
+                with st.spinner("Calculating accuracy metrics..."):
+                    metrics = calculate_accuracy_metrics(matched_ref_labels, predicted_labels)
+                
+                # Display results
+                st.markdown("---")
+                st.markdown("## 📊 Comparison Results")
+                
+                # Summary
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Overall Accuracy", f"{metrics['accuracy']*100:.2f}%")
+                with col2:
+                    st.metric("Matched Samples", len(matched_test_texts))
+                with col3:
+                    st.metric("Correct", metrics['correct_predictions'])
+                with col4:
+                    st.metric("Incorrect", metrics['incorrect_predictions'], delta_color="inverse")
+                
+                # Accuracy assessment
+                accuracy_percent = metrics['accuracy'] * 100
+                if accuracy_percent >= 80:
+                    st.success(f"✅ Excellent accuracy: {accuracy_percent:.2f}%")
+                elif accuracy_percent >= 60:
+                    st.info(f"⚠️ Good accuracy: {accuracy_percent:.2f}%")
+                else:
+                    st.warning(f"⚠️ Low accuracy: {accuracy_percent:.2f}% - Consider improving the model")
+                
+                # Per-class metrics
+                if "per_class" in metrics:
+                    st.markdown("### Per-Class Metrics")
+                    class_data = []
+                    for label, class_metrics in metrics["per_class"].items():
+                        if "precision" in class_metrics:
+                            class_data.append({
+                                "Class": label,
+                                "Precision": f"{class_metrics['precision']*100:.2f}%",
+                                "Recall": f"{class_metrics['recall']*100:.2f}%",
+                                "F1-Score": f"{class_metrics['f1_score']*100:.2f}%",
+                                "Support": class_metrics['support']
+                            })
+                    if class_data:
+                        class_df = pd.DataFrame(class_data)
+                        st.dataframe(class_df, use_container_width=True, hide_index=True)
+                
+                # Confusion Matrix
+                if "confusion_matrix" in metrics:
+                    st.markdown("### Confusion Matrix")
+                    cm = np.array(metrics["confusion_matrix"])
+                    cm_fig = plot_confusion_matrix(cm)
+                    if cm_fig:
+                        st.pyplot(cm_fig)
+                
+                # Detailed comparison
+                st.markdown("### Detailed Comparison")
+                comparison_df = pd.DataFrame({
+                    "Test Text": [t[:80] + "..." if len(t) > 80 else t for t in matched_test_texts],
+                    "Reference Label": matched_ref_labels,
+                    "Predicted Label": predicted_labels,
+                    "Match": ["✅" if a == p else "❌" for a, p in zip(matched_ref_labels, predicted_labels)]
+                })
+                
+                # Filter
+                match_filter = st.selectbox("Filter:", ["All", "Correct", "Incorrect"], key="compare_filter")
+                if match_filter == "Correct":
+                    comparison_df = comparison_df[comparison_df["Match"] == "✅"]
+                elif match_filter == "Incorrect":
+                    comparison_df = comparison_df[comparison_df["Match"] == "❌"]
+                
+                st.dataframe(comparison_df.head(50), use_container_width=True, hide_index=True)
+                
+                # Download results
+                st.markdown("---")
+                st.markdown("### 💾 Download Results")
+                results_df = pd.DataFrame({
+                    "test_text": matched_test_texts,
+                    "reference_label": matched_ref_labels,
+                    "predicted_label": predicted_labels,
+                    "match": [a == p for a, p in zip(matched_ref_labels, predicted_labels)]
+                })
+                csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download comparison results as CSV",
+                    data=csv_bytes,
+                    file_name="dataset_comparison_results.csv",
+                    mime="text/csv",
+                    key="download_comparison_results"
+                )
+
+# ----------- Mode 5: Accuracy Meter/Validation -----------
+elif mode == "Accuracy Meter/Validation":
+    st.subheader("📊 Accuracy Meter & Model Validation")
+    
+    st.info("""
+    **Compare predicted sentiments with actual labels to measure model accuracy.**
+    
+    **Two comparison modes**:
+    1. **Single Dataset**: Compare predictions with labels in the same dataset
+    2. **Two Datasets**: Compare a reference dataset (with labels) with a test dataset (without labels)
+    """)
+    
+    # Ensure model is available
+    if not ensure_model_ui():
+        st.stop()
+    
+    # Comparison mode selection
+    comparison_mode = st.radio(
+        "Select comparison mode:",
+        ["Single Dataset (with labels)", "Two Datasets (reference + test)"],
+        key="comparison_mode_radio"
+    )
+    
+    if comparison_mode == "Single Dataset (with labels)":
+        st.markdown("### Step 1: Upload Reference Dataset")
+        st.markdown("Upload a CSV file with text and actual sentiment labels:")
+        
+        reference_file = st.file_uploader(
+            "Upload reference dataset (CSV with text and sentiment columns)",
+            type=["csv"],
+            key="accuracy_reference_uploader"
+        )
+    else:
+        st.markdown("### Step 1: Upload Reference Dataset (with labels)")
+        st.markdown("Upload a CSV file with text and actual sentiment labels:")
+        
+        reference_file = st.file_uploader(
+            "Upload reference dataset (CSV with text and sentiment columns)",
+            type=["csv"],
+            key="accuracy_reference_uploader_2"
+        )
+        
+        st.markdown("### Step 2: Upload Test Dataset (without labels)")
+        st.markdown("Upload a CSV file with text only (no sentiment labels):")
+        
+        test_file = st.file_uploader(
+            "Upload test dataset (CSV with text column only)",
+            type=["csv"],
+            key="accuracy_test_uploader"
+        )
     
     if reference_file is not None:
         # Read reference dataset
@@ -1480,21 +2037,9 @@ elif mode == "Accuracy Meter/Validation":
         else:
             st.success(f"✅ Reference dataset loaded: {len(df_ref)} rows")
             
-            # Auto-detect columns
+            # Auto-detect columns (excluding numerical)
             cols = list(df_ref.columns)
-            
-            # Find text column
-            text_col = None
-            for c in cols:
-                if 'text' in str(c).lower() or 'comment' in str(c).lower() or 'review' in str(c).lower():
-                    text_col = c
-                    break
-            if text_col is None:
-                # Use first string column
-                for c in cols:
-                    if df_ref[c].dtype == 'object':
-                        text_col = c
-                        break
+            text_col = detect_text_column(df_ref, exclude_numerical=True)
             
             # Find sentiment/label column
             sentiment_col = None
@@ -1503,9 +2048,31 @@ elif mode == "Accuracy Meter/Validation":
                     sentiment_col = c
                     break
             
+            # Filter numerical columns
+            non_numerical_cols = [c for c in cols if not is_numerical_column(df_ref[c])]
+            
+            if not non_numerical_cols:
+                st.error("⚠️ No suitable text columns found. All columns appear to be numerical.")
+                st.stop()
+            
+            # Warn about numerical columns
+            numerical_cols = [c for c in cols if is_numerical_column(df_ref[c])]
+            if numerical_cols:
+                st.info(f"ℹ️ Excluded {len(numerical_cols)} numerical column(s) from text analysis: {', '.join(numerical_cols[:5])}")
+            
             # Let user select columns
             st.markdown("### Step 2: Select Columns")
-            text_col = st.selectbox("Select text column:", options=cols, index=cols.index(text_col) if text_col else 0, key="accuracy_text_col")
+            if text_col and text_col in non_numerical_cols:
+                default_idx = non_numerical_cols.index(text_col)
+            else:
+                default_idx = 0
+            
+            text_col = st.selectbox(
+                "Select text column (numerical columns excluded):",
+                options=non_numerical_cols,
+                index=default_idx,
+                key="accuracy_text_col"
+            )
             
             if sentiment_col:
                 sentiment_col = st.selectbox("Select sentiment/label column:", options=cols, index=cols.index(sentiment_col), key="accuracy_sentiment_col")
@@ -1670,7 +2237,315 @@ elif mode == "Accuracy Meter/Validation":
                     key="download_accuracy_results"
                 )
 
-# ----------- Mode 5: Manual Text Input -----------
+# ----------- Mode 5: Compare Two Datasets -----------
+elif mode == "Compare Two Datasets":
+    st.subheader("📊 Compare Two Datasets")
+    
+    st.info("""
+    **Compare two different datasets to check accuracy and consistency.**
+    
+    **How it works**:
+    1. Upload **Dataset 1**: Reference dataset with declared/known labels (Positive, Negative, Neutral)
+    2. Upload **Dataset 2**: Test dataset without labels (will be predicted)
+    3. The app will predict sentiments for Dataset 2 (skipping numeric-only entries)
+    4. Compare predictions with Dataset 1 labels (if matching texts found)
+    5. View accuracy metrics and detailed comparison
+    """)
+    
+    # Ensure model is available
+    if not ensure_model_ui():
+        st.stop()
+    
+    st.markdown("### Step 1: Upload Reference Dataset (With Labels)")
+    st.markdown("Upload a CSV file with text and actual sentiment labels:")
+    
+    reference_file = st.file_uploader(
+        "Upload reference dataset with labels (CSV)",
+        type=["csv"],
+        key="compare_ref_uploader"
+    )
+    
+    st.markdown("### Step 2: Upload Test Dataset (Without Labels)")
+    st.markdown("Upload a CSV file with text only (labels will be predicted, numeric-only entries will be skipped):")
+    
+    test_file = st.file_uploader(
+        "Upload test dataset without labels (CSV)",
+        type=["csv"],
+        key="compare_test_uploader"
+    )
+    
+    if reference_file is not None and test_file is not None:
+        # Read both datasets
+        df_ref, header_row_ref = read_csv_with_header_detection(reference_file)
+        df_test, header_row_test = read_csv_with_header_detection(test_file)
+        
+        if df_ref is None or df_test is None:
+            st.error("Could not parse one or both CSV files.")
+        else:
+            st.success(f"✅ Reference dataset: {len(df_ref)} rows | Test dataset: {len(df_test)} rows")
+            
+            # Auto-detect columns for reference
+            ref_cols = list(df_ref.columns)
+            ref_text_col = None
+            ref_sentiment_col = None
+            
+            for c in ref_cols:
+                if 'text' in str(c).lower() or 'comment' in str(c).lower():
+                    ref_text_col = c
+                if 'sentiment' in str(c).lower() or 'label' in str(c).lower():
+                    ref_sentiment_col = c
+            
+            if ref_text_col is None:
+                for c in ref_cols:
+                    if df_ref[c].dtype == 'object':
+                        ref_text_col = c
+                        break
+            
+            # Auto-detect columns for test
+            test_cols = list(df_test.columns)
+            test_text_col = None
+            
+            for c in test_cols:
+                if 'text' in str(c).lower() or 'comment' in str(c).lower():
+                    test_text_col = c
+                    break
+            
+            if test_text_col is None:
+                for c in test_cols:
+                    if df_test[c].dtype == 'object':
+                        test_text_col = c
+                        break
+            
+            # Let user select columns
+            st.markdown("### Step 3: Select Columns")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Reference Dataset:**")
+                ref_text_col = st.selectbox("Text column:", options=ref_cols, index=ref_cols.index(ref_text_col) if ref_text_col else 0, key="ref_text_col")
+                if ref_sentiment_col:
+                    ref_sentiment_col = st.selectbox("Sentiment column:", options=ref_cols, index=ref_cols.index(ref_sentiment_col), key="ref_sentiment_col")
+                else:
+                    ref_sentiment_col = st.selectbox("Sentiment column:", options=ref_cols, key="ref_sentiment_col")
+            
+            with col2:
+                st.markdown("**Test Dataset:**")
+                test_text_col = st.selectbox("Text column:", options=test_cols, index=test_cols.index(test_text_col) if test_text_col else 0, key="test_text_col")
+            
+            # Show previews
+            st.markdown("### Preview")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Reference Dataset (first 5 rows):**")
+                st.dataframe(df_ref[[ref_text_col, ref_sentiment_col]].head(5))
+            with col2:
+                st.markdown("**Test Dataset (first 5 rows):**")
+                st.dataframe(df_test[[test_text_col]].head(5))
+            
+            if st.button("Compare Datasets & Calculate Accuracy", key="compare_datasets_btn"):
+                # Process reference dataset - filter numeric
+                ref_texts_raw = df_ref[ref_text_col].astype(str).tolist()
+                ref_labels_raw = df_ref[ref_sentiment_col].astype(str).str.strip().tolist()
+                
+                ref_texts = []
+                ref_labels = []
+                for text, label in zip(ref_texts_raw, ref_labels_raw):
+                    cleaned = clean_text(text)
+                    if cleaned and not is_numeric_only(text):
+                        ref_texts.append(cleaned)
+                        ref_labels.append(label)
+                
+                # Normalize reference labels
+                label_normalize = {
+                    "positive": "Positive", "negative": "Negative", "neutral": "Neutral",
+                    "POSITIVE": "Positive", "NEGATIVE": "Negative", "NEUTRAL": "Neutral"
+                }
+                ref_labels = [label_normalize.get(l, l) for l in ref_labels]
+                
+                # Process test dataset - filter out numeric-only text
+                test_texts_raw = df_test[test_text_col].astype(str).tolist()
+                test_texts = []
+                test_indices = []
+                
+                with st.spinner("Filtering numeric-only text and preparing data..."):
+                    for idx, text in enumerate(test_texts_raw):
+                        cleaned = clean_text(text)
+                        if cleaned and not is_numeric_only(text):
+                            test_texts.append(cleaned)
+                            test_indices.append(idx)
+                
+                skipped_count = len(test_texts_raw) - len(test_texts)
+                if skipped_count > 0:
+                    st.info(f"ℹ️ Skipped {skipped_count} numeric-only or empty entries from test dataset")
+                
+                if not test_texts:
+                    st.error("No valid text found in test dataset after filtering. Please check your data.")
+                    st.stop()
+                
+                # Predict sentiments for test dataset
+                with st.spinner(f"Predicting sentiments for {len(test_texts)} texts..."):
+                    if active_pipe is not None:
+                        predicted_numeric = active_pipe.predict(test_texts)  # type: ignore
+                        predicted_labels = [labels[p] for p in predicted_numeric]  # type: ignore
+                    else:
+                        st.error("Model not available. Please ensure a model is loaded.")
+                        st.stop()
+                
+                # Create mapping from reference texts to labels
+                ref_text_to_label = {}
+                for text, label in zip(ref_texts, ref_labels):
+                    ref_text_to_label[text.lower().strip()] = label
+                
+                # Match test predictions with reference labels
+                matched_predictions = []
+                matched_actuals = []
+                matched_texts_list = []
+                unmatched_predictions = []
+                unmatched_texts = []
+                
+                for test_text, pred_label in zip(test_texts, predicted_labels):
+                    test_key = test_text.lower().strip()
+                    if test_key in ref_text_to_label:
+                        matched_predictions.append(pred_label)
+                        matched_actuals.append(ref_text_to_label[test_key])
+                        matched_texts_list.append(test_text)
+                    else:
+                        unmatched_predictions.append(pred_label)
+                        unmatched_texts.append(test_text)
+                
+                # Display results
+                st.markdown("---")
+                st.markdown("## 📊 Comparison Results")
+                
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Test Samples", len(test_texts))
+                with col2:
+                    st.metric("Matched with Reference", len(matched_predictions))
+                with col3:
+                    st.metric("Unmatched (New)", len(unmatched_predictions))
+                with col4:
+                    st.metric("Skipped (Numeric)", skipped_count)
+                
+                # Calculate accuracy for matched samples
+                if matched_predictions and matched_actuals:
+                    st.markdown("### Accuracy for Matched Samples")
+                    
+                    metrics = calculate_accuracy_metrics(matched_actuals, matched_predictions)
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Accuracy", f"{metrics['accuracy']*100:.2f}%")
+                    with col2:
+                        st.metric("Correct", metrics['correct_predictions'])
+                    with col3:
+                        st.metric("Incorrect", metrics['incorrect_predictions'], delta_color="inverse")
+                    with col4:
+                        st.metric("Total Matched", metrics['total_samples'])
+                    
+                    # Accuracy visualization
+                    accuracy_percent = metrics['accuracy'] * 100
+                    if accuracy_percent >= 80:
+                        st.success(f"✅ Excellent accuracy: {accuracy_percent:.2f}%")
+                    elif accuracy_percent >= 60:
+                        st.info(f"⚠️ Good accuracy: {accuracy_percent:.2f}%")
+                    else:
+                        st.warning(f"⚠️ Low accuracy: {accuracy_percent:.2f}%")
+                    
+                    # Per-class metrics
+                    if "per_class" in metrics:
+                        st.markdown("### Per-Class Metrics (Matched Samples)")
+                        class_data = []
+                        for label, class_metrics in metrics["per_class"].items():
+                            if "precision" in class_metrics:
+                                class_data.append({
+                                    "Class": label,
+                                    "Precision": f"{class_metrics['precision']*100:.2f}%",
+                                    "Recall": f"{class_metrics['recall']*100:.2f}%",
+                                    "F1-Score": f"{class_metrics['f1_score']*100:.2f}%",
+                                    "Support": class_metrics['support']
+                                })
+                        if class_data:
+                            class_df = pd.DataFrame(class_data)
+                            st.dataframe(class_df, use_container_width=True, hide_index=True)
+                    
+                    # Confusion Matrix
+                    if "confusion_matrix" in metrics:
+                        st.markdown("### Confusion Matrix (Matched Samples)")
+                        cm = np.array(metrics["confusion_matrix"])
+                        cm_fig = plot_confusion_matrix(cm)
+                        if cm_fig:
+                            st.pyplot(cm_fig)
+                        else:
+                            cm_df = pd.DataFrame(
+                                cm,
+                                index=["Actual: Negative", "Actual: Neutral", "Actual: Positive"],
+                                columns=["Pred: Negative", "Pred: Neutral", "Pred: Positive"]
+                            )
+                            st.dataframe(cm_df)
+                    
+                    # Detailed comparison for matched
+                    st.markdown("### Matched Samples Comparison")
+                    matched_comparison = []
+                    for text, actual, pred in zip(matched_texts_list, matched_actuals, matched_predictions):
+                        matched_comparison.append({
+                            "Text": text[:100] + "..." if len(text) > 100 else text,
+                            "Actual (Ref)": actual,
+                            "Predicted (Test)": pred,
+                            "Match": "✅" if actual == pred else "❌"
+                        })
+                    
+                    if matched_comparison:
+                        matched_df = pd.DataFrame(matched_comparison)
+                        match_filter = st.selectbox("Filter matched samples:", ["All", "Correct", "Incorrect"], key="matched_filter")
+                        if match_filter == "Correct":
+                            matched_df = matched_df[matched_df["Match"] == "✅"]
+                        elif match_filter == "Incorrect":
+                            matched_df = matched_df[matched_df["Match"] == "❌"]
+                        st.dataframe(matched_df.head(50), use_container_width=True, hide_index=True)
+                
+                # Show unmatched predictions
+                if unmatched_predictions:
+                    st.markdown("### Unmatched Samples (New Predictions)")
+                    st.info(f"Found {len(unmatched_predictions)} texts in test dataset that don't match reference dataset. These are new predictions.")
+                    
+                    unmatched_df = pd.DataFrame({
+                        "Text": [t[:100] + "..." if len(t) > 100 else t for t in unmatched_texts],
+                        "Predicted Sentiment": unmatched_predictions
+                    })
+                    st.dataframe(unmatched_df.head(50), use_container_width=True, hide_index=True)
+                
+                # Download results
+                st.markdown("---")
+                st.markdown("### 💾 Download Results")
+                
+                download_data = []
+                for text, pred in zip(test_texts, predicted_labels):
+                    actual = ref_text_to_label.get(text.lower().strip(), "N/A (Not in reference)")
+                    download_data.append({
+                        "text": text,
+                        "predicted_sentiment": pred,
+                        "actual_sentiment": actual,
+                        "match_status": "Matched" if text.lower().strip() in ref_text_to_label else "Unmatched"
+                    })
+                
+                results_df = pd.DataFrame(download_data)
+                csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download comparison results as CSV",
+                    data=csv_bytes,
+                    file_name="dataset_comparison_results.csv",
+                    mime="text/csv",
+                    key="download_comparison_results"
+                )
+    
+    elif reference_file is None and test_file is None:
+        st.info("👆 Please upload both datasets to begin comparison")
+    else:
+        st.warning("⚠️ Please upload both reference and test datasets")
+
+# ----------- Mode 6: Manual Text Input -----------
 elif mode == "Manual Text Input":
     # Ensure model UI is set up (will try to load transformer)
     ensure_model_ui()

@@ -4,7 +4,7 @@ A comprehensive sentiment analysis application with **transformer-based models**
 
 ## ✨ Features
 
-- **Five Analysis Modes**: Dataset, Social Media (Twitter/YouTube), Image/Screenshot, Accuracy Meter/Validation, Manual Input
+- **Six Analysis Modes**: Dataset, Social Media (Twitter/YouTube), Image/Screenshot, Compare Two Datasets, Accuracy Meter/Validation, Manual Input
 - **Transformer Model**: RoBERTa-base sentiment analysis (state-of-the-art accuracy)
 - **Automatic Fallback**: Uses joblib model if transformer unavailable
 - **Advanced Visualizations**: Word clouds, time-series charts, confidence scores
@@ -65,9 +65,11 @@ App opens at `http://localhost:8501`
 - Analyze social media links
 - Upload images/screenshots (OCR text extraction)
 - Validate model accuracy with reference datasets
+- Compare two datasets (declared vs non-declared labels)
 - Enter text manually
 - View word clouds and time-series charts
 - Download results
+- **Automatic numeric filtering**: Skips numeric-only entries
 
 ## 🚀 Deployment & Hosting
 
