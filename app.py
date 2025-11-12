@@ -12,6 +12,16 @@ import json
 from collections import Counter
 import numpy as np
 
+# Try to import sklearn metrics for accuracy calculation
+try:
+    from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, precision_recall_fscore_support
+    SKLEARN_METRICS_AVAILABLE = True
+except ImportError:
+    SKLEARN_METRICS_AVAILABLE = False
+    # Fallback functions if sklearn not available
+    def accuracy_score(y_true, y_pred):
+        return sum(y_true == y_pred) / len(y_true) if len(y_true) > 0 else 0.0
+
 # Try to import snscrape (optional - may not work on all platforms)
 # Note: snscrape is archived and incompatible with Python 3.13+
 # Completely disabled on Python 3.13+ (Streamlit Cloud uses Python 3.13)
@@ -507,6 +517,7 @@ mode = st.sidebar.selectbox(
         "Analyze Dataset",
         "Analyze Social Media Link",
         "Analyze Image/Screenshot",
+        "Accuracy Meter/Validation",
         "Manual Text Input"
     ],
     key="mode_selectbox"
@@ -709,6 +720,137 @@ def get_top_keywords(texts, sentiment_label, n=10):
     # Count and return top N
     counter = Counter(words)
     return counter.most_common(n)
+
+def calculate_accuracy_metrics(y_true, y_pred, label_names=["Negative", "Neutral", "Positive"]):
+    """
+    Calculate comprehensive accuracy metrics.
+    
+    Args:
+        y_true: List of actual labels (0, 1, 2 or "Negative", "Neutral", "Positive")
+        y_pred: List of predicted labels (0, 1, 2 or "Negative", "Neutral", "Positive")
+        label_names: List of label names
+    
+    Returns:
+        Dictionary with metrics
+    """
+    # Convert labels to numeric if needed
+    label_map = {"Negative": 0, "Neutral": 1, "Positive": 2}
+    
+    y_true_num = []
+    y_pred_num = []
+    
+    for label in y_true:
+        if isinstance(label, str):
+            y_true_num.append(label_map.get(label, 1))
+        else:
+            y_true_num.append(int(label))
+    
+    for label in y_pred:
+        if isinstance(label, str):
+            y_pred_num.append(label_map.get(label, 1))
+        else:
+            y_pred_num.append(int(label))
+    
+    y_true_num = np.array(y_true_num)
+    y_pred_num = np.array(y_pred_num)
+    
+    # Calculate overall accuracy
+    if SKLEARN_METRICS_AVAILABLE:
+        acc = accuracy_score(y_true_num, y_pred_num)
+    else:
+        acc = sum(y_true_num == y_pred_num) / len(y_true_num) if len(y_true_num) > 0 else 0.0
+    
+    metrics = {
+        "accuracy": float(acc),
+        "total_samples": len(y_true_num),
+        "correct_predictions": int(np.sum(y_true_num == y_pred_num)),
+        "incorrect_predictions": int(np.sum(y_true_num != y_pred_num))
+    }
+    
+    # Calculate per-class metrics if sklearn is available
+    if SKLEARN_METRICS_AVAILABLE:
+        try:
+            precision, recall, f1, support = precision_recall_fscore_support(
+                y_true_num, y_pred_num, labels=[0, 1, 2], average=None, zero_division=0
+            )
+            
+            # Per-class metrics
+            class_metrics = {}
+            for i, label_name in enumerate(label_names):
+                class_metrics[label_name] = {
+                    "precision": float(precision[i]),
+                    "recall": float(recall[i]),
+                    "f1_score": float(f1[i]),
+                    "support": int(support[i])
+                }
+            metrics["per_class"] = class_metrics
+            
+            # Macro averages
+            metrics["macro_avg"] = {
+                "precision": float(np.mean(precision)),
+                "recall": float(np.mean(recall)),
+                "f1_score": float(np.mean(f1))
+            }
+            
+            # Confusion matrix
+            cm = confusion_matrix(y_true_num, y_pred_num, labels=[0, 1, 2])
+            metrics["confusion_matrix"] = cm.tolist()
+            
+            # Classification report text
+            try:
+                report = classification_report(y_true_num, y_pred_num, target_names=label_names, output_dict=False)
+                metrics["classification_report"] = report
+            except:
+                metrics["classification_report"] = "Unable to generate classification report"
+        except Exception as e:
+            metrics["error"] = f"Error calculating detailed metrics: {e}"
+    else:
+        # Basic per-class accuracy without sklearn
+        class_metrics = {}
+        for i, label_name in enumerate(label_names):
+            mask = y_true_num == i
+            if np.sum(mask) > 0:
+                class_acc = np.sum((y_true_num == i) & (y_pred_num == i)) / np.sum(mask)
+                class_metrics[label_name] = {"accuracy": float(class_acc), "support": int(np.sum(mask))}
+            else:
+                class_metrics[label_name] = {"accuracy": 0.0, "support": 0}
+        metrics["per_class"] = class_metrics
+    
+    return metrics
+
+def plot_confusion_matrix(cm, labels=["Negative", "Neutral", "Positive"]):
+    """Plot confusion matrix."""
+    try:
+        import matplotlib.pyplot as plt
+        try:
+            import seaborn as sns
+            fig, ax = plt.subplots(figsize=(8, 6))
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=labels, yticklabels=labels, ax=ax)
+            ax.set_xlabel('Predicted')
+            ax.set_ylabel('Actual')
+            ax.set_title('Confusion Matrix')
+            plt.tight_layout()
+            return fig
+        except ImportError:
+            # Fallback to matplotlib only
+            fig, ax = plt.subplots(figsize=(8, 6))
+            im = ax.imshow(cm, interpolation='nearest', cmap='Blues')
+            ax.figure.colorbar(im, ax=ax)
+            ax.set(xticks=np.arange(cm.shape[1]), yticks=np.arange(cm.shape[0]),
+                   xticklabels=labels, yticklabels=labels,
+                   title='Confusion Matrix', ylabel='Actual', xlabel='Predicted')
+            
+            # Add text annotations
+            thresh = cm.max() / 2.
+            for i in range(cm.shape[0]):
+                for j in range(cm.shape[1]):
+                    ax.text(j, i, format(cm[i, j], 'd'),
+                           ha="center", va="center",
+                           color="white" if cm[i, j] > thresh else "black")
+            plt.tight_layout()
+            return fig
+    except:
+        return None
 
 def initialize_ocr_reader():
     """Initialize EasyOCR reader (lazy loading to avoid slow startup)."""
@@ -1302,7 +1444,233 @@ elif mode == "Analyze Image/Screenshot":
                         # Variables not defined (analysis didn't complete)
                         pass
 
-# ----------- Mode 4: Manual Text Input -----------
+# ----------- Mode 4: Accuracy Meter/Validation -----------
+elif mode == "Accuracy Meter/Validation":
+    st.subheader("📊 Accuracy Meter & Model Validation")
+    
+    st.info("""
+    **Compare predicted sentiments with actual labels to measure model accuracy.**
+    
+    **How it works**:
+    1. Upload a reference dataset with actual sentiment labels (Positive, Negative, Neutral)
+    2. The app will predict sentiments for the same dataset
+    3. Compare predictions with actual labels
+    4. View comprehensive accuracy metrics
+    """)
+    
+    # Ensure model is available
+    if not ensure_model_ui():
+        st.stop()
+    
+    st.markdown("### Step 1: Upload Reference Dataset")
+    st.markdown("Upload a CSV file with text and actual sentiment labels:")
+    
+    reference_file = st.file_uploader(
+        "Upload reference dataset (CSV with text and sentiment columns)",
+        type=["csv"],
+        key="accuracy_reference_uploader"
+    )
+    
+    if reference_file is not None:
+        # Read reference dataset
+        df_ref, header_row = read_csv_with_header_detection(reference_file)
+        
+        if df_ref is None:
+            st.error("Could not parse uploaded CSV.")
+        else:
+            st.success(f"✅ Reference dataset loaded: {len(df_ref)} rows")
+            
+            # Auto-detect columns
+            cols = list(df_ref.columns)
+            
+            # Find text column
+            text_col = None
+            for c in cols:
+                if 'text' in str(c).lower() or 'comment' in str(c).lower() or 'review' in str(c).lower():
+                    text_col = c
+                    break
+            if text_col is None:
+                # Use first string column
+                for c in cols:
+                    if df_ref[c].dtype == 'object':
+                        text_col = c
+                        break
+            
+            # Find sentiment/label column
+            sentiment_col = None
+            for c in cols:
+                if 'sentiment' in str(c).lower() or 'label' in str(c).lower():
+                    sentiment_col = c
+                    break
+            
+            # Let user select columns
+            st.markdown("### Step 2: Select Columns")
+            text_col = st.selectbox("Select text column:", options=cols, index=cols.index(text_col) if text_col else 0, key="accuracy_text_col")
+            
+            if sentiment_col:
+                sentiment_col = st.selectbox("Select sentiment/label column:", options=cols, index=cols.index(sentiment_col), key="accuracy_sentiment_col")
+            else:
+                sentiment_col = st.selectbox("Select sentiment/label column:", options=cols, key="accuracy_sentiment_col")
+            
+            # Show preview
+            st.markdown("### Preview")
+            preview_df = df_ref[[text_col, sentiment_col]].head(10)
+            st.dataframe(preview_df)
+            
+            # Validate labels
+            unique_labels = df_ref[sentiment_col].unique()
+            valid_labels = ["Positive", "Negative", "Neutral", "positive", "negative", "neutral", "POSITIVE", "NEGATIVE", "NEUTRAL"]
+            
+            invalid_labels = [l for l in unique_labels if str(l).strip() not in valid_labels]
+            if invalid_labels:
+                st.warning(f"⚠️ Found invalid labels: {invalid_labels}. Expected: Positive, Negative, Neutral")
+            
+            if st.button("Calculate Accuracy", key="calculate_accuracy_btn"):
+                # Clean and prepare data
+                texts = df_ref[text_col].astype(str).apply(clean_text).tolist()
+                actual_labels = df_ref[sentiment_col].astype(str).str.strip().tolist()
+                
+                # Normalize labels
+                label_normalize = {
+                    "positive": "Positive",
+                    "negative": "Negative",
+                    "neutral": "Neutral",
+                    "POSITIVE": "Positive",
+                    "NEGATIVE": "Negative",
+                    "NEUTRAL": "Neutral"
+                }
+                actual_labels = [label_normalize.get(l, l) for l in actual_labels]
+                
+                # Predict sentiments
+                with st.spinner("Predicting sentiments..."):
+                    if active_pipe is not None:
+                        predicted_numeric = active_pipe.predict(texts)  # type: ignore
+                        predicted_labels = [labels[p] for p in predicted_numeric]  # type: ignore
+                    else:
+                        st.error("Model not available. Please ensure a model is loaded.")
+                        st.stop()
+                
+                # Calculate metrics
+                with st.spinner("Calculating accuracy metrics..."):
+                    metrics = calculate_accuracy_metrics(actual_labels, predicted_labels)
+                
+                # Display results
+                st.markdown("---")
+                st.markdown("## 📊 Accuracy Results")
+                
+                # Overall metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Overall Accuracy", f"{metrics['accuracy']*100:.2f}%")
+                with col2:
+                    st.metric("Total Samples", metrics['total_samples'])
+                with col3:
+                    st.metric("Correct", metrics['correct_predictions'], delta=f"+{metrics['correct_predictions']}")
+                with col4:
+                    st.metric("Incorrect", metrics['incorrect_predictions'], delta=f"-{metrics['incorrect_predictions']}", delta_color="inverse")
+                
+                # Accuracy visualization
+                accuracy_percent = metrics['accuracy'] * 100
+                if accuracy_percent >= 80:
+                    st.success(f"✅ Excellent accuracy: {accuracy_percent:.2f}%")
+                elif accuracy_percent >= 60:
+                    st.info(f"⚠️ Good accuracy: {accuracy_percent:.2f}%")
+                else:
+                    st.warning(f"⚠️ Low accuracy: {accuracy_percent:.2f}% - Consider retraining the model")
+                
+                # Per-class metrics
+                if "per_class" in metrics:
+                    st.markdown("### Per-Class Metrics")
+                    class_data = []
+                    for label, class_metrics in metrics["per_class"].items():
+                        if "precision" in class_metrics:
+                            class_data.append({
+                                "Class": label,
+                                "Precision": f"{class_metrics['precision']*100:.2f}%",
+                                "Recall": f"{class_metrics['recall']*100:.2f}%",
+                                "F1-Score": f"{class_metrics['f1_score']*100:.2f}%",
+                                "Support": class_metrics['support']
+                            })
+                        else:
+                            class_data.append({
+                                "Class": label,
+                                "Accuracy": f"{class_metrics['accuracy']*100:.2f}%",
+                                "Support": class_metrics['support']
+                            })
+                    
+                    if class_data:
+                        class_df = pd.DataFrame(class_data)
+                        st.dataframe(class_df, use_container_width=True, hide_index=True)
+                
+                # Macro averages
+                if "macro_avg" in metrics:
+                    st.markdown("### Macro Averages")
+                    macro_col1, macro_col2, macro_col3 = st.columns(3)
+                    with macro_col1:
+                        st.metric("Macro Precision", f"{metrics['macro_avg']['precision']*100:.2f}%")
+                    with macro_col2:
+                        st.metric("Macro Recall", f"{metrics['macro_avg']['recall']*100:.2f}%")
+                    with macro_col3:
+                        st.metric("Macro F1-Score", f"{metrics['macro_avg']['f1_score']*100:.2f}%")
+                
+                # Confusion Matrix
+                if "confusion_matrix" in metrics:
+                    st.markdown("### Confusion Matrix")
+                    cm = np.array(metrics["confusion_matrix"])
+                    cm_fig = plot_confusion_matrix(cm)
+                    if cm_fig:
+                        st.pyplot(cm_fig)
+                    else:
+                        # Fallback: show as table
+                        cm_df = pd.DataFrame(
+                            cm,
+                            index=["Actual: Negative", "Actual: Neutral", "Actual: Positive"],
+                            columns=["Pred: Negative", "Pred: Neutral", "Pred: Positive"]
+                        )
+                        st.dataframe(cm_df)
+                
+                # Classification Report
+                if "classification_report" in metrics and isinstance(metrics["classification_report"], str):
+                    st.markdown("### Classification Report")
+                    st.text(metrics["classification_report"])
+                
+                # Detailed comparison table
+                st.markdown("### Detailed Comparison")
+                comparison_df = pd.DataFrame({
+                    "Text": [t[:100] + "..." if len(t) > 100 else t for t in texts],
+                    "Actual": actual_labels,
+                    "Predicted": predicted_labels,
+                    "Match": ["✅" if a == p else "❌" for a, p in zip(actual_labels, predicted_labels)]
+                })
+                
+                # Filter options
+                match_filter = st.selectbox("Filter by match status:", ["All", "Correct", "Incorrect"], key="match_filter")
+                if match_filter == "Correct":
+                    comparison_df = comparison_df[comparison_df["Match"] == "✅"]
+                elif match_filter == "Incorrect":
+                    comparison_df = comparison_df[comparison_df["Match"] == "❌"]
+                
+                st.dataframe(comparison_df.head(50), use_container_width=True, hide_index=True)
+                
+                # Download results
+                st.markdown("---")
+                st.markdown("### 💾 Download Results")
+                results_df = pd.DataFrame({
+                    "text": texts,
+                    "actual_label": actual_labels,
+                    "predicted_label": predicted_labels,
+                    "match": [a == p for a, p in zip(actual_labels, predicted_labels)]
+                })
+                csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download accuracy results as CSV",
+                    data=csv_bytes,
+                    file_name="accuracy_results.csv",
+                    mime="text/csv",
+                    key="download_accuracy_results"
+                )
+
+# ----------- Mode 5: Manual Text Input -----------
 elif mode == "Manual Text Input":
     # Ensure model UI is set up (will try to load transformer)
     ensure_model_ui()
