@@ -1908,27 +1908,57 @@ elif mode == "Accuracy Meter/Validation":
                         st.dataframe(cm_df)
                 
                 # Classification Report
-                if "classification_report" in metrics and isinstance(metrics["classification_report"], str):
-                    st.markdown("### Classification Report")
-                    st.text(metrics["classification_report"])
+                if "classification_report" in metrics:
+                    st.markdown("### 📋 Classification Report")
+                    if isinstance(metrics["classification_report"], str):
+                        # Display as code block for better formatting
+                        st.code(metrics["classification_report"], language=None)
+                    else:
+                        # If it's not a string, try to generate it
+                        try:
+                            if SKLEARN_METRICS_AVAILABLE:
+                                # Convert labels to numeric for report generation
+                                label_map = {"Negative": 0, "Neutral": 1, "Positive": 2}
+                                y_true_num = [label_map.get(l, 1) if isinstance(l, str) else int(l) for l in actual_labels]
+                                y_pred_num = [label_map.get(l, 1) if isinstance(l, str) else int(l) for l in predicted_labels]
+                                report_text = classification_report(
+                                    y_true_num, y_pred_num,
+                                    target_names=["Negative", "Neutral", "Positive"],
+                                    output_dict=False
+                                )
+                                st.code(report_text, language=None)
+                            else:
+                                st.info("Classification report requires sklearn library.")
+                        except Exception as e:
+                            st.warning(f"Could not generate classification report: {e}")
                 
                 # Detailed comparison table
-                st.markdown("### Detailed Comparison")
-                comparison_df = pd.DataFrame({
-                    "Text": [t[:100] + "..." if len(t) > 100 else t for t in texts],
-                    "Actual": actual_labels,
-                    "Predicted": predicted_labels,
-                    "Match": ["✅" if a == p else "❌" for a, p in zip(actual_labels, predicted_labels)]
-                })
+                st.markdown("---")
+                st.markdown("### 📊 Detailed Comparison")
                 
-                # Filter options
-                match_filter = st.selectbox("Filter by match status:", ["All", "Correct", "Incorrect"], key="match_filter")
-                if match_filter == "Correct":
-                    comparison_df = comparison_df[comparison_df["Match"] == "✅"]
-                elif match_filter == "Incorrect":
-                    comparison_df = comparison_df[comparison_df["Match"] == "❌"]
-                
-                st.dataframe(comparison_df.head(50), use_container_width=True, hide_index=True)
+                # Ensure all variables are defined and have the same length
+                if len(texts) == len(actual_labels) == len(predicted_labels):
+                    comparison_df = pd.DataFrame({
+                        "Text": [t[:100] + "..." if len(t) > 100 else t for t in texts],
+                        "Actual": actual_labels,
+                        "Predicted": predicted_labels,
+                        "Match": ["✅" if a == p else "❌" for a, p in zip(actual_labels, predicted_labels)]
+                    })
+                    
+                    # Filter options
+                    match_filter = st.selectbox(
+                        "Filter by match status:", 
+                        ["All", "Correct", "Incorrect"], 
+                        key="match_filter"
+                    )
+                    if match_filter == "Correct":
+                        comparison_df = comparison_df[comparison_df["Match"] == "✅"]
+                    elif match_filter == "Incorrect":
+                        comparison_df = comparison_df[comparison_df["Match"] == "❌"]
+                    
+                    st.dataframe(comparison_df.head(50), use_container_width=True, hide_index=True)
+                else:
+                    st.error("⚠️ Error: Mismatch in data lengths. Cannot create comparison table.")
                 
                 # Download results
                 st.markdown("---")
