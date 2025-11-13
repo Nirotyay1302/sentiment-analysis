@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import re
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
@@ -77,8 +77,8 @@ def load_data(data_path=None):
 
 
 def generate_synthetic_data():
-    """Generate synthetic sentiment analysis training data."""
-    # Significantly expanded dataset for better training accuracy
+    """Generate comprehensive synthetic sentiment analysis training data with diverse examples."""
+    # MASSIVELY expanded dataset with diverse contexts and vocabulary for high accuracy
     positive_texts = [
         "I love this product! It's amazing and works perfectly.",
         "Great service, very satisfied with my purchase.",
@@ -168,7 +168,94 @@ def generate_synthetic_data():
         "Perfect for my needs, very happy.",
         "Excellent quality, exceeds expectations.",
         "Great product, highly recommended.",
-        "Outstanding performance, very satisfied."
+        "Outstanding performance, very satisfied.",
+        # Social media style positive
+        "OMG this is so good! 😍😍😍",
+        "Yasss! Best thing ever! 🔥",
+        "Love love love this!!! 💕",
+        "So happy with this purchase! 😊",
+        "This made my day! 🌟",
+        "Absolutely obsessed! ❤️",
+        "Can't recommend enough! ⭐⭐⭐⭐⭐",
+        "This is everything! 🙌",
+        "So worth it! 💯",
+        "Amazing! Just amazing! ✨",
+        # Review style positive
+        "5 stars! Would give 10 if I could.",
+        "This product changed my life for the better.",
+        "I've tried many but this is the best one.",
+        "Worth every single penny, highly recommend!",
+        "Quality is outstanding, very impressed.",
+        "Exceeded my expectations completely.",
+        "Best investment I've made this year.",
+        "This is exactly what I needed.",
+        "Perfect solution to my problem.",
+        "I'm so glad I found this product.",
+        # Detailed positive
+        "The quality is exceptional and the design is beautiful.",
+        "Fast shipping, great packaging, excellent product.",
+        "Customer service was helpful and responsive.",
+        "This works exactly as advertised, very reliable.",
+        "I use this daily and it never disappoints.",
+        "The attention to detail is remarkable.",
+        "This product has improved my daily routine.",
+        "I would definitely purchase this again.",
+        "The value for money is incredible.",
+        "This is a game changer, love it!",
+        # Emotional positive
+        "This brings me so much joy!",
+        "I'm thrilled with this purchase!",
+        "This makes me so happy!",
+        "I'm delighted with the quality!",
+        "This exceeded all my hopes!",
+        "I'm ecstatic about this product!",
+        "This fills me with satisfaction!",
+        "I'm overjoyed with this purchase!",
+        "This brings me great pleasure!",
+        "I'm elated with the results!",
+        # Action-oriented positive
+        "I will definitely buy this again!",
+        "I'm telling all my friends about this!",
+        "I can't wait to use this more!",
+        "I'm already planning to get another one!",
+        "This is going to be my go-to product!",
+        "I'm recommending this to everyone!",
+        "This is a must-have for everyone!",
+        "I'm so excited to use this daily!",
+        "This is perfect for my needs!",
+        "I'm completely satisfied with this!",
+        # More diverse positive expressions
+        "This is incredible! Best purchase ever!",
+        "I'm blown away by how good this is!",
+        "This product is a masterpiece!",
+        "I can't believe how amazing this is!",
+        "This is pure perfection!",
+        "I'm in love with this product!",
+        "This exceeded all my wildest dreams!",
+        "I'm speechless, it's that good!",
+        "This is absolutely phenomenal!",
+        "I'm so grateful I found this!",
+        "This is top-tier quality!",
+        "I'm amazed by the craftsmanship!",
+        "This is worth its weight in gold!",
+        "I'm so impressed with this!",
+        "This is a dream come true!",
+        "I'm beyond satisfied!",
+        "This is world-class quality!",
+        "I'm so glad I chose this!",
+        "This is absolutely brilliant!",
+        "I'm thrilled beyond words!",
+        # Additional positive with strong signals
+        "This is fantastic! I'm so pleased!",
+        "Wonderful! Absolutely wonderful!",
+        "I'm so excited about this amazing product!",
+        "This is superb! Highly recommend!",
+        "I'm very happy with this excellent purchase!",
+        "This is great! I love it so much!",
+        "I'm delighted! This is perfect!",
+        "This is awesome! Best decision ever!",
+        "I'm very pleased! This is wonderful!",
+        "This is terrific! I'm so satisfied!"
     ]
     
     negative_texts = [
@@ -260,7 +347,94 @@ def generate_synthetic_data():
         "Terrible purchase, regret buying.",
         "Poor workmanship, shoddy construction.",
         "Not worth the price, overpriced.",
-        "Terrible quality, avoid this product."
+        "Terrible quality, avoid this product.",
+        # Social media style negative
+        "Ugh this is so bad 😤",
+        "Worst purchase ever! 😡",
+        "So disappointed! 😞",
+        "This is trash! 🗑️",
+        "Not worth it at all! 👎",
+        "Huge waste of money! 💸",
+        "This sucks! 😒",
+        "Terrible experience! 😠",
+        "So frustrated with this! 😤",
+        "Avoid this product! ⛔",
+        # Review style negative
+        "1 star, would give 0 if possible.",
+        "This product ruined my experience.",
+        "I've never been so disappointed.",
+        "Complete waste of my hard-earned money.",
+        "Quality is terrible, very unimpressed.",
+        "Did not meet my expectations at all.",
+        "Worst investment I've made this year.",
+        "This is not what I needed at all.",
+        "Terrible solution, made things worse.",
+        "I'm so sorry I bought this product.",
+        # Detailed negative
+        "The quality is poor and the design is ugly.",
+        "Slow shipping, bad packaging, terrible product.",
+        "Customer service was unhelpful and unresponsive.",
+        "This doesn't work as advertised, very unreliable.",
+        "I tried using this but it always disappoints.",
+        "The lack of attention to detail is shocking.",
+        "This product has made my daily routine worse.",
+        "I would never purchase this again.",
+        "The value for money is terrible.",
+        "This is a complete waste, hate it!",
+        # Emotional negative
+        "This brings me so much frustration!",
+        "I'm devastated with this purchase!",
+        "This makes me so angry!",
+        "I'm appalled with the quality!",
+        "This failed all my expectations!",
+        "I'm furious about this product!",
+        "This fills me with disappointment!",
+        "I'm heartbroken with this purchase!",
+        "This brings me great sadness!",
+        "I'm miserable with the results!",
+        # Action-oriented negative
+        "I will never buy this again!",
+        "I'm warning all my friends about this!",
+        "I can't wait to return this!",
+        "I'm already planning to get a refund!",
+        "This is going to be my worst purchase!",
+        "I'm telling everyone to avoid this!",
+        "This is a must-avoid for everyone!",
+        "I'm so upset I have to use this!",
+        "This is terrible for my needs!",
+        "I'm completely unsatisfied with this!",
+        # More diverse negative expressions
+        "This is absolutely terrible! Worst ever!",
+        "I'm shocked by how bad this is!",
+        "This product is a complete disaster!",
+        "I can't believe how awful this is!",
+        "This is pure garbage!",
+        "I'm disgusted with this product!",
+        "This failed all my expectations miserably!",
+        "I'm appalled, it's that bad!",
+        "This is absolutely atrocious!",
+        "I'm so regretful I bought this!",
+        "This is bottom-tier quality!",
+        "I'm horrified by the poor quality!",
+        "This is worth less than nothing!",
+        "I'm so unimpressed with this!",
+        "This is a nightmare come true!",
+        "I'm beyond disappointed!",
+        "This is substandard quality!",
+        "I'm so sorry I chose this!",
+        "This is absolutely dreadful!",
+        "I'm devastated beyond words!",
+        # Additional negative with strong signals
+        "This is horrible! I'm so upset!",
+        "Awful! Absolutely awful!",
+        "I'm so angry about this terrible product!",
+        "This is dreadful! Would not recommend!",
+        "I'm very unhappy with this poor purchase!",
+        "This is bad! I hate it so much!",
+        "I'm frustrated! This is terrible!",
+        "This is lousy! Worst decision ever!",
+        "I'm very displeased! This is awful!",
+        "This is pathetic! I'm so unsatisfied!"
     ]
     
     neutral_texts = [
@@ -353,7 +527,83 @@ def generate_synthetic_data():
         "Standard functionality, works as needed.",
         "Average performance, acceptable level.",
         "Regular operation, no problems.",
-        "Normal quality, standard expectations."
+        "Normal quality, standard expectations.",
+        # Social media style neutral
+        "It's okay I guess 🤷",
+        "Meh, nothing special 😑",
+        "It's fine, whatever 🤔",
+        "Not bad, not great 🤷‍♂️",
+        "It is what it is 😐",
+        "Average at best 📊",
+        "Could be better, could be worse ⚖️",
+        "Nothing to write home about 📝",
+        "It's alright I suppose 🤷",
+        "Just average, nothing more 📉",
+        # Review style neutral
+        "3 stars, it's acceptable but not great.",
+        "This product is functional but unremarkable.",
+        "I've seen better but also seen worse.",
+        "It's reasonably priced for what you get.",
+        "Quality is average, meets basic needs.",
+        "It does the job but nothing more.",
+        "Standard product with standard performance.",
+        "This is adequate but not impressive.",
+        "It works but I expected more.",
+        "This is fine but not exceptional.",
+        # Detailed neutral
+        "The quality is average and the design is standard.",
+        "Normal shipping, standard packaging, average product.",
+        "Customer service was adequate and professional.",
+        "This works as expected, reasonably reliable.",
+        "I use this occasionally and it's fine.",
+        "The attention to detail is standard.",
+        "This product hasn't changed my routine much.",
+        "I might purchase this again if needed.",
+        "The value for money is reasonable.",
+        "This is acceptable, no complaints.",
+        # Factual neutral
+        "The product arrived as scheduled.",
+        "It functions according to specifications.",
+        "The item matches the description provided.",
+        "Standard features work as intended.",
+        "The product serves its basic purpose.",
+        "It meets the minimum requirements.",
+        "The quality is within acceptable range.",
+        "It performs at an average level.",
+        "The product is functional and usable.",
+        "It does what it's supposed to do.",
+        # Question/uncertain neutral
+        "I'm not sure how I feel about this.",
+        "It might be good, need more time to decide.",
+        "This could work but I'm uncertain.",
+        "I'll need to use it more to judge.",
+        "It seems okay but time will tell.",
+        "I'm on the fence about this product.",
+        "This might be useful, not sure yet.",
+        "I'll give it a chance and see.",
+        "It's hard to form an opinion yet.",
+        "I need more experience with this to decide.",
+        # More diverse neutral expressions
+        "It's neither good nor bad, just average.",
+        "This is a standard product with standard features.",
+        "It meets the requirements but doesn't excel.",
+        "This is functional but not remarkable.",
+        "It's acceptable quality for the price point.",
+        "This works adequately for basic needs.",
+        "It's a typical product in this category.",
+        "This is reasonable but not outstanding.",
+        "It serves its purpose without being special.",
+        "This is decent but nothing to rave about.",
+        "It's a middle-of-the-road product.",
+        "This is satisfactory but not impressive.",
+        "It's okay for what it is.",
+        "This is standard fare, nothing exceptional.",
+        "It's adequate for everyday use.",
+        "This is run-of-the-mill quality.",
+        "It's acceptable but not noteworthy.",
+        "This is typical, nothing stands out.",
+        "It's fine, but I've seen better.",
+        "This is ordinary, nothing special."
     ]
     
     # Combine and create labels
@@ -387,14 +637,17 @@ def train_model(X_train, y_train, X_val, y_val, use_xgboost=True):
     # Create pipeline with TF-IDF vectorization and classifier
     if use_xgboost:
         classifier = xgb.XGBClassifier(
-            n_estimators=200,
-            max_depth=8,
+            n_estimators=300,
+            max_depth=7,
             learning_rate=0.05,
             random_state=42,
             eval_metric='mlogloss',
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_weight=3
+            subsample=0.85,
+            colsample_bytree=0.85,
+            min_child_weight=2,
+            gamma=0.05,
+            reg_alpha=0.05,
+            reg_lambda=0.5
         )
     else:
         classifier = LogisticRegression(
@@ -406,12 +659,13 @@ def train_model(X_train, y_train, X_val, y_val, use_xgboost=True):
     
     pipeline = Pipeline([
         ('tfidf', TfidfVectorizer(
-            max_features=10000,
-            ngram_range=(1, 3),
+            max_features=15000,
+            ngram_range=(1, 2),
             stop_words='english',
             min_df=1,
-            max_df=0.95,
-            analyzer='word'
+            max_df=0.92,
+            analyzer='word',
+            lowercase=True
         )),
         ('classifier', classifier)
     ])
@@ -450,7 +704,7 @@ def main():
                             [labels.count(0), labels.count(1), labels.count(2)]):
         print(f"  {label}: {count}")
     
-    # Split data
+    # Split data with stratification for balanced classes
     X_train, X_test, y_train, y_test = train_test_split(
         texts, labels, test_size=0.2, random_state=42, stratify=labels
     )
@@ -465,6 +719,17 @@ def main():
     
     # Train model
     model = train_model(X_train, y_train, X_val, y_val, use_xgboost=True)
+    
+    # Cross-validation score for better accuracy estimate
+    print("\n" + "=" * 60)
+    print("Cross-Validation Score (5-fold)")
+    print("=" * 60)
+    try:
+        cv_scores = cross_val_score(model, X_train + X_val, y_train + y_val, cv=5, scoring='accuracy')
+        print(f"Cross-validation accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
+        print(f"Individual fold scores: {cv_scores}")
+    except Exception as e:
+        print(f"Cross-validation not available: {e}")
     
     # Evaluate on test set
     print("\n" + "=" * 60)
