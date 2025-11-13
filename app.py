@@ -1239,6 +1239,11 @@ if mode == "Analyze Dataset":
                 progress_bar.empty()
                 status_text.empty()
                 
+                # Ensure predictions were generated
+                if not preds:
+                    st.error("Failed to generate predictions. Please check your model.")
+                    st.stop()
+                
                 df_filtered["Predicted"] = preds
                 df_filtered["Predicted_Label"] = df_filtered["Predicted"].map(labels)  # type: ignore
                 result_df = df_filtered
@@ -1276,104 +1281,115 @@ if mode == "Analyze Dataset":
                     st.warning("⚠️ No valid text entries found after filtering. Please check your dataset.")
                     st.stop()
                 
+                # Ensure model is loaded before prediction
+                if active_pipe is None:
+                    st.error("Model not available. Please ensure a model is loaded.")
+                    st.stop()
+                
                 head_preds = predict_sentiment(head_texts)
+                if not head_preds:
+                    st.error("Failed to generate predictions. Please check your model.")
+                    st.stop()
+                
                 head_df_filtered["Predicted"] = head_preds
                 head_df_filtered["Predicted_Label"] = head_df_filtered["Predicted"].map(labels)  # type: ignore
                 result_df = head_df_filtered
                 st.success(f"Quick scan (first {sample_size} rows) complete - {len(head_texts)} valid entries analyzed")
 
-            # Allow filtering by sentiment (based on text predictions)
-            sentiment_choices = ["Positive", "Neutral", "Negative"]
-            selected_sentiments = st.multiselect("Filter results by sentiment (text) — leave empty to show all", options=sentiment_choices, default=sentiment_choices, key="dataset_sentiment_filter")
+            # Only show results if analysis was performed
+            if 'result_df' in locals() and result_df is not None and not result_df.empty:
+                # Allow filtering by sentiment (based on text predictions)
+                sentiment_choices = ["Positive", "Neutral", "Negative"]
+                selected_sentiments = st.multiselect("Filter results by sentiment (text) — leave empty to show all", options=sentiment_choices, default=sentiment_choices, key="dataset_sentiment_filter")
 
-            # Show sample of results
-            st.markdown("**Sample results:**")
-            filtered_df = result_df[result_df["Predicted_Label"].isin(selected_sentiments)] if selected_sentiments else result_df
-            st.dataframe(filtered_df.head(20))
+                # Show sample of results
+                st.markdown("**Sample results:**")
+                filtered_df = result_df[result_df["Predicted_Label"].isin(selected_sentiments)] if selected_sentiments else result_df
+                st.dataframe(filtered_df.head(20))
 
-            # Sentiment distribution (pie + bar)
-            # Normalize label order to Positive, Neutral, Negative for consistent colors
-            ordered_labels = ["Positive", "Neutral", "Negative"]
-            sentiment_counts = filtered_df["Predicted_Label"].value_counts().reindex(ordered_labels, fill_value=0) if not filtered_df.empty else pd.Series([0,0,0], index=ordered_labels)  # type: ignore
-            if sentiment_counts.sum() > 0:
-                render_pie_chart(sentiment_counts, colors=["#2ecc71", "#f1c40f", "#e74c3c"])
-            else:
-                st.info("No rows match the selected sentiment filters.")
+                # Sentiment distribution (pie + bar)
+                # Normalize label order to Positive, Neutral, Negative for consistent colors
+                ordered_labels = ["Positive", "Neutral", "Negative"]
+                sentiment_counts = filtered_df["Predicted_Label"].value_counts().reindex(ordered_labels, fill_value=0) if not filtered_df.empty else pd.Series([0,0,0], index=ordered_labels)  # type: ignore
+                if sentiment_counts.sum() > 0:
+                    render_pie_chart(sentiment_counts, colors=["#2ecc71", "#f1c40f", "#e74c3c"])
+                else:
+                    st.info("No rows match the selected sentiment filters.")
 
-            # Bar chart for counts
-            st.markdown("**Counts (bar):**")
-            st.bar_chart(sentiment_counts)
+                # Bar chart for counts
+                st.markdown("**Counts (bar):**")
+                st.bar_chart(sentiment_counts)
 
-            # Advanced Visualizations
-            st.markdown("---")
-            st.markdown("## 📊 Advanced Analytics")
-            
-            # Word Clouds by sentiment
-            if WORDCLOUD_AVAILABLE and not filtered_df.empty:
-                st.markdown("### 💭 Word Clouds by Sentiment")
+                # Advanced Visualizations
+                st.markdown("---")
+                st.markdown("## 📊 Advanced Analytics")
+                
+                # Word Clouds by sentiment
+                if WORDCLOUD_AVAILABLE and not filtered_df.empty:
+                    st.markdown("### 💭 Word Clouds by Sentiment")
+                    try:
+                        pos_texts = filtered_df[filtered_df["Predicted_Label"] == "Positive"][text_col].tolist() if len(filtered_df[filtered_df["Predicted_Label"] == "Positive"]) > 0 else []
+                        neg_texts = filtered_df[filtered_df["Predicted_Label"] == "Negative"][text_col].tolist() if len(filtered_df[filtered_df["Predicted_Label"] == "Negative"]) > 0 else []
+                        
+                        if pos_texts:
+                            st.markdown("**Positive Sentiment Words:**")
+                            generate_wordcloud(pos_texts, "Positive Sentiment Word Cloud")
+                        
+                        if neg_texts:
+                            st.markdown("**Negative Sentiment Words:**")
+                            generate_wordcloud(neg_texts, "Negative Sentiment Word Cloud")
+                    except Exception as e:
+                        st.info("Could not generate word clouds. Need more data.")
+                
+                # Top Keywords
+                st.markdown("### 🔑 Top Keywords by Sentiment")
                 try:
-                    pos_texts = filtered_df[filtered_df["Predicted_Label"] == "Positive"][text_col].tolist() if len(filtered_df[filtered_df["Predicted_Label"] == "Positive"]) > 0 else []
-                    neg_texts = filtered_df[filtered_df["Predicted_Label"] == "Negative"][text_col].tolist() if len(filtered_df[filtered_df["Predicted_Label"] == "Negative"]) > 0 else []
-                    
-                    if pos_texts:
-                        st.markdown("**Positive Sentiment Words:**")
-                        generate_wordcloud(pos_texts, "Positive Sentiment Word Cloud")
-                    
-                    if neg_texts:
-                        st.markdown("**Negative Sentiment Words:**")
-                        generate_wordcloud(neg_texts, "Negative Sentiment Word Cloud")
-                except Exception as e:
-                    st.info("Could not generate word clouds. Need more data.")
-            
-            # Top Keywords
-            st.markdown("### 🔑 Top Keywords by Sentiment")
-            try:
-                for sent_label in ["Positive", "Negative"]:
-                    sent_texts = filtered_df[filtered_df["Predicted_Label"] == sent_label][text_col].tolist()
-                    if sent_texts:
-                        keywords = get_top_keywords(sent_texts, sent_label, n=10)
-                        if keywords:
-                            st.write(f"**{sent_label}:**")
-                            keyword_str = ", ".join([f"{word} ({count})" for word, count in keywords])
-                            st.write(keyword_str)
-            except Exception:
-                pass
-            
-            # Time-series analysis if date column exists
-            st.markdown("### 📈 Sentiment Over Time")
-            date_columns = [col for col in filtered_df.columns if any(x in col.lower() for x in ['date', 'time', 'timestamp'])]
-            if date_columns:
-                st.info(f"Found potential date columns: {', '.join(date_columns)}")
-                date_col_selected = st.selectbox("Select date column for time-series analysis:", options=date_columns + ['None'], key="date_col_select")
-                if date_col_selected and date_col_selected != 'None':
-                    if plot_timeseries(filtered_df, date_col_selected, "Predicted_Label"):
-                        st.success("Time-series chart generated!")
-            else:
-                st.info("No date/timestamp columns found. Time-series analysis not available.")
-            
-            st.markdown("---")
-            
-            # Show top positive / negative examples (if available)
-            st.markdown("## 📝 Top Examples")
-            try:
-                pos_examples = result_df[result_df["Predicted_Label"] == "Positive"][text_col].head(5)  # type: ignore
-                neg_examples = result_df[result_df["Predicted_Label"] == "Negative"][text_col].head(5)  # type: ignore
-                st.write("**Top Positive examples:**")
-                for i, v in enumerate(pos_examples, 1):
-                    st.write(f"{i}. {v}")
-                st.write("**Top Negative examples:**")
-                for i, v in enumerate(neg_examples, 1):
-                    st.write(f"{i}. {v}")
-            except Exception:
-                pass
+                    for sent_label in ["Positive", "Negative"]:
+                        sent_texts = filtered_df[filtered_df["Predicted_Label"] == sent_label][text_col].tolist()
+                        if sent_texts:
+                            keywords = get_top_keywords(sent_texts, sent_label, n=10)
+                            if keywords:
+                                st.write(f"**{sent_label}:**")
+                                keyword_str = ", ".join([f"{word} ({count})" for word, count in keywords])
+                                st.write(keyword_str)
+                except Exception:
+                    pass
+                
+                # Time-series analysis if date column exists
+                st.markdown("### 📈 Sentiment Over Time")
+                date_columns = [col for col in filtered_df.columns if any(x in col.lower() for x in ['date', 'time', 'timestamp'])]
+                if date_columns:
+                    st.info(f"Found potential date columns: {', '.join(date_columns)}")
+                    date_col_selected = st.selectbox("Select date column for time-series analysis:", options=date_columns + ['None'], key="date_col_select")
+                    if date_col_selected and date_col_selected != 'None':
+                        if plot_timeseries(filtered_df, date_col_selected, "Predicted_Label"):
+                            st.success("Time-series chart generated!")
+                else:
+                    st.info("No date/timestamp columns found. Time-series analysis not available.")
+                
+                st.markdown("---")
+                
+                # Show top positive / negative examples (if available)
+                st.markdown("## 📝 Top Examples")
+                try:
+                    pos_examples = result_df[result_df["Predicted_Label"] == "Positive"][text_col].head(5)  # type: ignore
+                    neg_examples = result_df[result_df["Predicted_Label"] == "Negative"][text_col].head(5)  # type: ignore
+                    st.write("**Top Positive examples:**")
+                    for i, v in enumerate(pos_examples, 1):
+                        st.write(f"{i}. {v}")
+                    st.write("**Top Negative examples:**")
+                    for i, v in enumerate(neg_examples, 1):
+                        st.write(f"{i}. {v}")
+                except Exception:
+                    pass
 
-            # Download results (filtered view)
-            try:
-                download_df = filtered_df if not filtered_df.empty else result_df
-                csv_bytes = download_df.to_csv(index=False).encode("utf-8")
-                st.download_button("Download results as CSV", data=csv_bytes, file_name="sentiment_results.csv", mime="text/csv", key="download_results")
-            except Exception as e:
-                st.error(f"Could not prepare download: {e}")
+                # Download results (filtered view)
+                try:
+                    download_df = filtered_df if not filtered_df.empty else result_df
+                    csv_bytes = download_df.to_csv(index=False).encode("utf-8")
+                    st.download_button("Download results as CSV", data=csv_bytes, file_name="sentiment_results.csv", mime="text/csv", key="download_results")
+                except Exception as e:
+                    st.error(f"Could not prepare download: {e}")
 
 # ----------- Mode 2: Social Media Analyzer (Twitter/YouTube) -----------
 elif mode == "Analyze Social Media Link":
@@ -1807,13 +1823,8 @@ elif mode == "Accuracy Meter/Validation":
             preview_df = df_ref[[text_col, sentiment_col]].head(10)
             st.dataframe(preview_df)
             
-            # Validate labels
-            unique_labels = df_ref[sentiment_col].unique()
-            valid_labels = ["Positive", "Negative", "Neutral", "positive", "negative", "neutral", "POSITIVE", "NEGATIVE", "NEUTRAL"]
-            
-            invalid_labels = [l for l in unique_labels if str(l).strip() not in valid_labels]
-            if invalid_labels:
-                st.warning(f"⚠️ Found invalid labels: {invalid_labels}. Expected: Positive, Negative, Neutral")
+            # Validate labels (silently - don't show warning for non-standard labels)
+            # The app will work with any labels, but only Positive/Negative/Neutral are used for accuracy calculation
             
             if st.button("Calculate Accuracy", key="calculate_accuracy_btn"):
                 # Clean and prepare data
