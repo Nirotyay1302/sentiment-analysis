@@ -1195,7 +1195,13 @@ if mode == "Analyze Dataset":
                 valid_indices = []
                 filtered_count = 0
                 for i, text in enumerate(texts):
-                    if text.strip() and not is_numeric_only(text):
+                    # Ensure text is a string and handle None/NaN values
+                    if text is None or pd.isna(text):
+                        filtered_count += 1
+                        continue
+                    
+                    text_str = str(text).strip()
+                    if text_str and not is_numeric_only(text_str):
                         valid_indices.append(i)
                     else:
                         filtered_count += 1
@@ -1249,7 +1255,13 @@ if mode == "Analyze Dataset":
                 valid_indices = []
                 filtered_count = 0
                 for i, text in enumerate(head_texts):
-                    if text.strip() and not is_numeric_only(text):
+                    # Ensure text is a string and handle None/NaN values
+                    if text is None or pd.isna(text):
+                        filtered_count += 1
+                        continue
+                    
+                    text_str = str(text).strip()
+                    if text_str and not is_numeric_only(text_str):
                         valid_indices.append(i)
                     else:
                         filtered_count += 1
@@ -1938,8 +1950,20 @@ elif mode == "Accuracy Meter/Validation":
                 
                 # Ensure all variables are defined and have the same length
                 if len(texts) == len(actual_labels) == len(predicted_labels):
+                    # Safely convert texts to strings and handle None/NaN values
+                    safe_texts = []
+                    for t in texts:
+                        if t is None or pd.isna(t):
+                            safe_texts.append("")
+                        else:
+                            text_str = str(t).strip()
+                            if len(text_str) > 100:
+                                safe_texts.append(text_str[:100] + "...")
+                            else:
+                                safe_texts.append(text_str)
+                    
                     comparison_df = pd.DataFrame({
-                        "Text": [t[:100] + "..." if len(t) > 100 else t for t in texts],
+                        "Text": safe_texts,
                         "Actual": actual_labels,
                         "Predicted": predicted_labels,
                         "Match": ["✅" if a == p else "❌" for a, p in zip(actual_labels, predicted_labels)]
