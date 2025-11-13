@@ -676,6 +676,12 @@ def clean_text(text):
     if re.match(r'^[\d\s.,+-]+$', text.strip()):
         return ""
     
+    # Remove special characters but keep spaces, letters, numbers, and basic punctuation
+    text = re.sub(r'[^A-Za-z0-9\s.,!?]', '', text)
+    # Normalize whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
 def is_numeric_column(series, threshold=0.8):
     """
     Check if a column is primarily numeric.
@@ -1189,19 +1195,35 @@ if mode == "Analyze Dataset":
             analyze_full = st.checkbox("Analyze full dataset (may take longer)", value=False, key="analyze_full_checkbox")
 
             if analyze_full:
-                texts = df[text_col].astype(str).apply(clean_text).tolist()
-                
-                # Filter out numeric-only and empty texts
+                # Get original texts before cleaning for validation
+                original_texts = df[text_col].astype(str).tolist()
+                texts = []
                 valid_indices = []
                 filtered_count = 0
-                for i, text in enumerate(texts):
-                    # Ensure text is a string and handle None/NaN values
-                    if text is None or pd.isna(text):
+                
+                for i, original_text in enumerate(original_texts):
+                    # Check original text first before cleaning
+                    if original_text is None or pd.isna(original_text):
                         filtered_count += 1
                         continue
                     
-                    text_str = str(text).strip()
-                    if text_str and not is_numeric_only(text_str):
+                    original_str = str(original_text).strip()
+                    if not original_str or original_str.lower() in ['nan', 'none', 'null', '']:
+                        filtered_count += 1
+                        continue
+                    
+                    # Only filter if it's clearly numeric-only (very strict check)
+                    if is_numeric_only(original_str):
+                        filtered_count += 1
+                        continue
+                    
+                    # Clean the text for processing
+                    cleaned = clean_text(original_str)
+                    if cleaned:  # Only add if cleaning produced valid text
+                        texts.append(cleaned)
+                        valid_indices.append(i)
+                    elif len(original_str) > 3:  # If original has content, use it even if cleaning removed some
+                        texts.append(original_str)
                         valid_indices.append(i)
                     else:
                         filtered_count += 1
@@ -1209,7 +1231,6 @@ if mode == "Analyze Dataset":
                 if filtered_count > 0:
                     st.info(f"ℹ️ Filtered out {filtered_count} numeric-only or empty entries (not suitable for sentiment analysis)")
                 
-                texts = [texts[i] for i in valid_indices]
                 df_filtered = df.iloc[valid_indices].copy() if valid_indices else df.copy()
                 
                 # Ensure model UI is set up (will try to load transformer)
@@ -1254,19 +1275,36 @@ if mode == "Analyze Dataset":
                 
                 # Use first N rows (deterministic) instead of random sampling
                 head_df = df.head(int(sample_size)).copy()
-                head_texts = head_df[text_col].astype(str).apply(clean_text).tolist()
+                original_head_texts = head_df[text_col].astype(str).tolist()
                 
-                # Filter out numeric-only and empty texts
+                # Filter out numeric-only and empty texts (less aggressive)
+                head_texts = []
                 valid_indices = []
                 filtered_count = 0
-                for i, text in enumerate(head_texts):
-                    # Ensure text is a string and handle None/NaN values
-                    if text is None or pd.isna(text):
+                
+                for i, original_text in enumerate(original_head_texts):
+                    # Check original text first before cleaning
+                    if original_text is None or pd.isna(original_text):
                         filtered_count += 1
                         continue
                     
-                    text_str = str(text).strip()
-                    if text_str and not is_numeric_only(text_str):
+                    original_str = str(original_text).strip()
+                    if not original_str or original_str.lower() in ['nan', 'none', 'null', '']:
+                        filtered_count += 1
+                        continue
+                    
+                    # Only filter if it's clearly numeric-only (very strict check)
+                    if is_numeric_only(original_str):
+                        filtered_count += 1
+                        continue
+                    
+                    # Clean the text for processing
+                    cleaned = clean_text(original_str)
+                    if cleaned:  # Only add if cleaning produced valid text
+                        head_texts.append(cleaned)
+                        valid_indices.append(i)
+                    elif len(original_str) > 3:  # If original has content, use it even if cleaning removed some
+                        head_texts.append(original_str)
                         valid_indices.append(i)
                     else:
                         filtered_count += 1
@@ -1274,7 +1312,6 @@ if mode == "Analyze Dataset":
                 if filtered_count > 0:
                     st.info(f"ℹ️ Filtered out {filtered_count} numeric-only or empty entries (not suitable for sentiment analysis)")
                 
-                head_texts = [head_texts[i] for i in valid_indices]
                 head_df_filtered = head_df.iloc[valid_indices].copy() if valid_indices else head_df.copy()
                 
                 if len(head_texts) == 0:
@@ -1954,46 +1991,6 @@ elif mode == "Accuracy Meter/Validation":
                                 st.info("Classification report requires sklearn library.")
                         except Exception as e:
                             st.warning(f"Could not generate classification report: {e}")
-                
-                # Detailed comparison table
-                st.markdown("---")
-                st.markdown("### 📊 Detailed Comparison")
-                
-                # Ensure all variables are defined and have the same length
-                if len(texts) == len(actual_labels) == len(predicted_labels):
-                    # Safely convert texts to strings and handle None/NaN values
-                    safe_texts = []
-                    for t in texts:
-                        if t is None or pd.isna(t):
-                            safe_texts.append("")
-                        else:
-                            text_str = str(t).strip()
-                            if len(text_str) > 100:
-                                safe_texts.append(text_str[:100] + "...")
-                            else:
-                                safe_texts.append(text_str)
-                    
-                    comparison_df = pd.DataFrame({
-                        "Text": safe_texts,
-                        "Actual": actual_labels,
-                        "Predicted": predicted_labels,
-                        "Match": ["✅" if a == p else "❌" for a, p in zip(actual_labels, predicted_labels)]
-                    })
-                    
-                    # Filter options
-                    match_filter = st.selectbox(
-                        "Filter by match status:", 
-                        ["All", "Correct", "Incorrect"], 
-                        key="match_filter"
-                    )
-                    if match_filter == "Correct":
-                        comparison_df = comparison_df[comparison_df["Match"] == "✅"]
-                    elif match_filter == "Incorrect":
-                        comparison_df = comparison_df[comparison_df["Match"] == "❌"]
-                    
-                    st.dataframe(comparison_df.head(50), use_container_width=True, hide_index=True)
-                else:
-                    st.error("⚠️ Error: Mismatch in data lengths. Cannot create comparison table.")
                 
                 # Download results
                 st.markdown("---")
