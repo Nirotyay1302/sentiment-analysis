@@ -268,6 +268,66 @@ else:
 
 labels = {0: "Negative", 1: "Neutral", 2: "Positive"}
 
+# Label mapping function for complex sentiment labels (same as in train_model.py)
+POSITIVE_KEYWORDS = ['positive', 'joy', 'excitement', 'contentment', 'happiness', 'love', 'grateful', 'amazing', 
+                     'excellent', 'great', 'wonderful', 'fantastic', 'happy', 'pleased', 'satisfied', 'delighted', 
+                     'thrilled', 'ecstatic', 'elated', 'jubilant', 'cheerful', 'optimistic', 'hopeful', 'proud', 
+                     'triumph', 'heartwarming', 'celebrating', 'victory', 'success', 'achievement', 'gratitude',
+                     'elation', 'playful', 'serenity', 'bliss', 'euphoria', 'content', 'fulfilled', 'blessed',
+                     'appreciative', 'thankful', 'inspired', 'motivated', 'energetic', 'enthusiastic', 'passionate']
+
+NEGATIVE_KEYWORDS = ['negative', 'sad', 'angry', 'frustrated', 'disappointed', 'terrible', 'awful', 'bad', 'hate', 
+                     'worst', 'horrible', 'disgusting', 'depressed', 'anxious', 'worried', 'fear', 'stress', 
+                     'pressure', 'obstacle', 'problem', 'difficulty', 'challenge', 'failure', 'loss', 'pain', 
+                     'suffering', 'grief', 'sorrow', 'despair', 'hopeless', 'bitterness', 'loneliness', 
+                     'embarrassed', 'despair', 'hate', 'bitterness', 'resentment', 'rage', 'fury', 'annoyance',
+                     'irritation', 'disgust', 'contempt', 'shame', 'guilt', 'regret', 'remorse', 'melancholy',
+                     'gloom', 'misery', 'anguish', 'torment', 'agony', 'distress', 'trouble', 'hardship']
+
+NEUTRAL_KEYWORDS = ['neutral', 'okay', 'fine', 'average', 'normal', 'regular', 'standard', 'typical', 'ordinary', 
+                    'moderate', 'balanced', 'calm', 'indifferent', 'unbiased', 'objective', 'factual', 'informative',
+                    'curiosity', 'wondering', 'questioning', 'contemplative', 'reflective', 'thoughtful', 'pensive',
+                    'contemplative', 'analytical', 'logical', 'rational', 'practical', 'matter-of-fact']
+
+def map_sentiment_label(label):
+    """
+    Map complex sentiment labels to 3 classes: Negative, Neutral, Positive.
+    Uses keyword matching to categorize labels (same function as in train_model.py).
+    Returns string labels: "Negative", "Neutral", or "Positive"
+    """
+    label_str = str(label).strip().lower()
+    
+    # Direct mapping if already in standard format
+    label_map = {"negative": "Negative", "neutral": "Neutral", "positive": "Positive"}
+    if label_str in label_map:
+        return label_map[label_str]
+    
+    # Check for positive keywords
+    for keyword in POSITIVE_KEYWORDS:
+        if keyword in label_str:
+            return "Positive"
+    
+    # Check for negative keywords
+    for keyword in NEGATIVE_KEYWORDS:
+        if keyword in label_str:
+            return "Negative"
+    
+    # Check for neutral keywords
+    for keyword in NEUTRAL_KEYWORDS:
+        if keyword in label_str:
+            return "Neutral"
+    
+    # Try to parse as integer (0, 1, or 2)
+    try:
+        iv = int(label_str)
+        if iv in [0, 1, 2]:
+            return labels[iv]
+    except (ValueError, TypeError):
+        pass
+    
+    # Default to neutral if unclear
+    return "Neutral"
+
 def predict_sentiment(texts):
     """Predict sentiment using available model or TextBlob fallback."""
     if isinstance(texts, str):
@@ -1868,16 +1928,8 @@ elif mode == "Accuracy Meter/Validation":
                 texts = df_ref[text_col].astype(str).apply(clean_text).tolist()
                 actual_labels = df_ref[sentiment_col].astype(str).str.strip().tolist()
                 
-                # Normalize labels
-                label_normalize = {
-                    "positive": "Positive",
-                    "negative": "Negative",
-                    "neutral": "Neutral",
-                    "POSITIVE": "Positive",
-                    "NEGATIVE": "Negative",
-                    "NEUTRAL": "Neutral"
-                }
-                actual_labels = [label_normalize.get(l, l) for l in actual_labels]
+                # Normalize labels using the same mapping function as training
+                actual_labels = [map_sentiment_label(l) for l in actual_labels]
                 
                 # Predict sentiments
                 with st.spinner("Predicting sentiments..."):

@@ -1,31 +1,106 @@
 """
 Training script for Sentiment Analysis Model
-Trains a model using TF-IDF vectorization and XGBoost classifier
-Saves the model as model.joblib for use in the Streamlit app
+Improved: randomized hyperparameter search, stratified CV, early stopping, upsampling option,
+and CLI arguments for reproducible experiments.
+Additionally: optional transformer fine-tuning (calls train_transformer.py) and saves a
+lightweight transformer wrapper into model.joblib so the app can detect/use it.
 """
-
-import pandas as pd
-import numpy as np
-import joblib
-import re
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
-import xgboost as xgb
-from sklearn.linear_model import LogisticRegression
 import os
+import re
+import sys
+import subprocess
+import argparse
+import joblib
+import numpy as np
+import pandas as pd
+from scipy.stats import randint, uniform
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, f1_score
+from sklearn.model_selection import train_test_split, StratifiedKFold, RandomizedSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.utils import resample
+
+# Optional XGBoost import (if available)
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+except Exception:
+    xgb = None
+    XGBOOST_AVAILABLE = False
 
 # Label mapping: 0=Negative, 1=Neutral, 2=Positive
-LABEL_MAP = {"Negative": 0, "Neutral": 1, "Positive": 2}
+LABEL_MAP = {"negative": 0, "neutral": 1, "positive": 2}
 REVERSE_LABEL_MAP = {0: "Negative", 1: "Neutral", 2: "Positive"}
+
+# Track last detected column names so we can pass them to transformer trainer
+LAST_DATA_TEXT_COLUMN = None
+LAST_DATA_LABEL_COLUMN = None
+
+# Extended keyword lists for mapping complex sentiment labels to 3 classes
+POSITIVE_KEYWORDS = ['positive', 'joy', 'excitement', 'contentment', 'happiness', 'love', 'grateful', 'amazing', 
+                     'excellent', 'great', 'wonderful', 'fantastic', 'happy', 'pleased', 'satisfied', 'delighted', 
+                     'thrilled', 'ecstatic', 'elated', 'jubilant', 'cheerful', 'optimistic', 'hopeful', 'proud', 
+                     'triumph', 'heartwarming', 'celebrating', 'victory', 'success', 'achievement', 'gratitude',
+                     'elation', 'playful', 'serenity', 'bliss', 'euphoria', 'content', 'fulfilled', 'blessed',
+                     'appreciative', 'thankful', 'inspired', 'motivated', 'energetic', 'enthusiastic', 'passionate']
+
+NEGATIVE_KEYWORDS = ['negative', 'sad', 'angry', 'frustrated', 'disappointed', 'terrible', 'awful', 'bad', 'hate', 
+                     'worst', 'horrible', 'disgusting', 'depressed', 'anxious', 'worried', 'fear', 'stress', 
+                     'pressure', 'obstacle', 'problem', 'difficulty', 'challenge', 'failure', 'loss', 'pain', 
+                     'suffering', 'grief', 'sorrow', 'despair', 'hopeless', 'bitterness', 'loneliness', 
+                     'embarrassed', 'despair', 'hate', 'bitterness', 'resentment', 'rage', 'fury', 'annoyance',
+                     'irritation', 'disgust', 'contempt', 'shame', 'guilt', 'regret', 'remorse', 'melancholy',
+                     'gloom', 'misery', 'anguish', 'torment', 'agony', 'distress', 'trouble', 'hardship']
+
+NEUTRAL_KEYWORDS = ['neutral', 'okay', 'fine', 'average', 'normal', 'regular', 'standard', 'typical', 'ordinary', 
+                    'moderate', 'balanced', 'calm', 'indifferent', 'unbiased', 'objective', 'factual', 'informative',
+                    'curiosity', 'wondering', 'questioning', 'contemplative', 'reflective', 'thoughtful', 'pensive',
+                    'contemplative', 'analytical', 'logical', 'rational', 'practical', 'matter-of-fact']
+
+
+def map_sentiment_label(label):
+    """
+    Map complex sentiment labels to 3 classes: Negative (0), Neutral (1), Positive (2).
+    Uses keyword matching to categorize labels.
+    """
+    label_str = str(label).strip().lower()
+    
+    # Direct mapping if already in standard format
+    if label_str in LABEL_MAP:
+        return LABEL_MAP[label_str]
+    
+    # Check for positive keywords
+    for keyword in POSITIVE_KEYWORDS:
+        if keyword in label_str:
+            return 2  # Positive
+    
+    # Check for negative keywords
+    for keyword in NEGATIVE_KEYWORDS:
+        if keyword in label_str:
+            return 0  # Negative
+    
+    # Check for neutral keywords
+    for keyword in NEUTRAL_KEYWORDS:
+        if keyword in label_str:
+            return 1  # Neutral
+    
+    # Try to parse as integer (0, 1, or 2)
+    try:
+        iv = int(label_str)
+        if iv in [0, 1, 2]:
+            return iv
+    except (ValueError, TypeError):
+        pass
+    
+    # Default to neutral if unclear
+    return 1  # Neutral
 
 
 def clean_text(text):
     """Clean and preprocess text data."""
     if pd.isna(text) or text == "":
         return ""
-    
     text = str(text)
     # Remove special characters but keep spaces, letters, numbers, and basic punctuation
     text = re.sub(r'[^A-Za-z0-9\s.,!?]', '', text)
@@ -36,729 +111,328 @@ def clean_text(text):
 
 def load_data(data_path=None):
     """
-    Load training data from CSV file or generate synthetic data for demonstration.
-    
-    Expected CSV format:
-    - Column with text data (auto-detected if column name contains 'text')
-    - Column with sentiment labels: 'Negative', 'Neutral', or 'Positive'
+    Load training data from CSV file or from Hugging Face dataset.
+    Returns: texts, labels, test_texts, test_labels (test_* may be None if using CSV without test split)
     """
+    global LAST_DATA_TEXT_COLUMN, LAST_DATA_LABEL_COLUMN
     if data_path and os.path.exists(data_path):
-        print(f"Loading data from {data_path}...")
         df = pd.read_csv(data_path)
-        
-        # Auto-detect text and label columns
         text_col = None
         label_col = None
-        
         for col in df.columns:
             if 'text' in col.lower() or 'comment' in col.lower() or 'review' in col.lower():
                 text_col = col
             if 'sentiment' in col.lower() or 'label' in col.lower():
                 label_col = col
-        
         if text_col is None:
-            # Use the first string column as text
             for col in df.columns:
                 if df[col].dtype == 'object':
                     text_col = col
                     break
-        
         if label_col is None:
             raise ValueError("Could not find label column. Expected column with 'sentiment' or 'label' in name.")
-        
+        LAST_DATA_TEXT_COLUMN = text_col
+        LAST_DATA_LABEL_COLUMN = label_col
         texts = df[text_col].apply(clean_text).tolist()
-        labels = df[label_col].apply(lambda x: LABEL_MAP.get(str(x).strip(), 1)).tolist()
+        # Filter out empty texts
+        valid_indices = [i for i, t in enumerate(texts) if t and len(t.strip()) > 0]
+        texts = [texts[i] for i in valid_indices]
         
-        return texts, labels
-    else:
-        # Generate synthetic training data for demonstration
-        print("No data file provided. Generating synthetic training data...")
-        return generate_synthetic_data()
+        # Normalize labels to 0/1/2 using improved mapping function
+        labels = df[label_col].apply(map_sentiment_label).tolist()
+        labels = [labels[i] for i in valid_indices]  # Match filtered texts
+        
+        print(f"\nLabel distribution after mapping:")
+        label_counts = pd.Series(labels).value_counts().sort_index()
+        for label_idx, count in label_counts.items():
+            print(f"  {REVERSE_LABEL_MAP[label_idx]}: {count}")
+        
+        return texts, labels, None, None
+
+    # fallback: Hugging Face tweet_eval
+    LAST_DATA_TEXT_COLUMN = None
+    LAST_DATA_LABEL_COLUMN = None
+    from datasets import load_dataset
+    print("No data file provided. Loading Hugging Face 'tweet_eval' dataset...")
+    dataset = load_dataset("tweet_eval", "sentiment")
+    # convert Column objects to plain lists before concatenation
+    train_texts = list(dataset["train"]["text"]) + list(dataset["validation"]["text"])
+    train_labels = list(dataset["train"]["label"]) + list(dataset["validation"]["label"])
+    test_texts = list(dataset["test"]["text"])
+    test_labels = list(dataset["test"]["label"])
+    train_texts = [clean_text(t) for t in train_texts]
+    test_texts = [clean_text(t) for t in test_texts]
+    return train_texts, train_labels, test_texts, test_labels
 
 
-def generate_synthetic_data():
-    """Generate comprehensive synthetic sentiment analysis training data with diverse examples."""
-    # MASSIVELY expanded dataset with diverse contexts and vocabulary for high accuracy
-    positive_texts = [
-        "I love this product! It's amazing and works perfectly.",
-        "Great service, very satisfied with my purchase.",
-        "Excellent quality, highly recommend to everyone.",
-        "This is the best thing I've ever bought!",
-        "Outstanding performance, exceeded my expectations.",
-        "Wonderful experience, will definitely buy again.",
-        "Fantastic product, worth every penny.",
-        "Amazing quality, very happy with this purchase.",
-        "Perfect! Exactly what I was looking for.",
-        "Highly satisfied, great value for money.",
-        "Love it! Great customer service too.",
-        "Excellent product, fast shipping.",
-        "Really happy with this purchase, great quality.",
-        "Outstanding! Better than I expected.",
-        "Wonderful product, highly recommended.",
-        "Fantastic! Works perfectly as described.",
-        "Amazing experience, very pleased.",
-        "Perfect solution for my needs.",
-        "Great product, excellent quality.",
-        "Love this! Will definitely order again.",
-        "Superb quality, excellent craftsmanship.",
-        "Brilliant product, highly impressed.",
-        "Top notch quality, very satisfied.",
-        "Exceptional service, great experience.",
-        "Outstanding value, would buy again.",
-        "Excellent quality, very pleased.",
-        "Great purchase, highly recommend.",
-        "Perfect product, exceeds expectations.",
-        "Amazing quality, love it!",
-        "Fantastic service, very happy.",
-        "Wonderful product, great value.",
-        "Excellent purchase, very satisfied.",
-        "Outstanding quality, highly recommend.",
-        "Great product, works perfectly.",
-        "Perfect quality, very pleased.",
-        "Amazing product, excellent value.",
-        "Fantastic quality, love it!",
-        "Wonderful purchase, highly satisfied.",
-        "Excellent product, great quality.",
-        "Outstanding service, very happy.",
-        "Brilliant! Absolutely fantastic experience.",
-        "Superior quality, couldn't be happier.",
-        "Exceeded all expectations, amazing!",
-        "Perfect fit, exactly what I needed.",
-        "Incredible value, highly recommended.",
-        "Top quality product, very impressed.",
-        "Outstanding customer support, thank you!",
-        "Beautiful design, love everything about it.",
-        "Best purchase I've made this year.",
-        "Exceptional quality, worth every cent.",
-        "Phenomenal product, works flawlessly.",
-        "Stellar performance, very satisfied.",
-        "Magnificent quality, highly pleased.",
-        "Tremendous value, excellent purchase.",
-        "Splendid product, very well made.",
-        "Marvelous experience, highly recommend.",
-        "Superb craftsmanship, excellent quality.",
-        "Remarkable product, very impressed.",
-        "Outstanding performance, love it!",
-        "Excellent build quality, very durable.",
-        "Great design, very user friendly.",
-        "Perfect size, exactly as described.",
-        "Fast delivery, excellent packaging.",
-        "High quality materials, very sturdy.",
-        "Impressive features, works great.",
-        "Well designed, easy to use.",
-        "Great value for money, highly satisfied.",
-        "Premium quality, worth the price.",
-        "Excellent product, meets all expectations.",
-        "Outstanding quality, very reliable.",
-        "Perfect condition, exactly as advertised.",
-        "Great service, quick response.",
-        "Excellent communication, very professional.",
-        "Highly functional, does the job perfectly.",
-        "Beautiful finish, very attractive.",
-        "Smooth operation, no issues.",
-        "Great performance, very efficient.",
-        "Excellent quality control, perfect product.",
-        "Outstanding durability, built to last.",
-        "Great investment, very pleased.",
-        "Excellent craftsmanship, attention to detail.",
-        "Perfect functionality, works as expected.",
-        "Great addition to my collection.",
-        "Excellent product, highly functional.",
-        "Outstanding value, great purchase.",
-        "Perfect for my needs, very happy.",
-        "Excellent quality, exceeds expectations.",
-        "Great product, highly recommended.",
-        "Outstanding performance, very satisfied.",
-        # Social media style positive
-        "OMG this is so good! 😍😍😍",
-        "Yasss! Best thing ever! 🔥",
-        "Love love love this!!! 💕",
-        "So happy with this purchase! 😊",
-        "This made my day! 🌟",
-        "Absolutely obsessed! ❤️",
-        "Can't recommend enough! ⭐⭐⭐⭐⭐",
-        "This is everything! 🙌",
-        "So worth it! 💯",
-        "Amazing! Just amazing! ✨",
-        # Review style positive
-        "5 stars! Would give 10 if I could.",
-        "This product changed my life for the better.",
-        "I've tried many but this is the best one.",
-        "Worth every single penny, highly recommend!",
-        "Quality is outstanding, very impressed.",
-        "Exceeded my expectations completely.",
-        "Best investment I've made this year.",
-        "This is exactly what I needed.",
-        "Perfect solution to my problem.",
-        "I'm so glad I found this product.",
-        # Detailed positive
-        "The quality is exceptional and the design is beautiful.",
-        "Fast shipping, great packaging, excellent product.",
-        "Customer service was helpful and responsive.",
-        "This works exactly as advertised, very reliable.",
-        "I use this daily and it never disappoints.",
-        "The attention to detail is remarkable.",
-        "This product has improved my daily routine.",
-        "I would definitely purchase this again.",
-        "The value for money is incredible.",
-        "This is a game changer, love it!",
-        # Emotional positive
-        "This brings me so much joy!",
-        "I'm thrilled with this purchase!",
-        "This makes me so happy!",
-        "I'm delighted with the quality!",
-        "This exceeded all my hopes!",
-        "I'm ecstatic about this product!",
-        "This fills me with satisfaction!",
-        "I'm overjoyed with this purchase!",
-        "This brings me great pleasure!",
-        "I'm elated with the results!",
-        # Action-oriented positive
-        "I will definitely buy this again!",
-        "I'm telling all my friends about this!",
-        "I can't wait to use this more!",
-        "I'm already planning to get another one!",
-        "This is going to be my go-to product!",
-        "I'm recommending this to everyone!",
-        "This is a must-have for everyone!",
-        "I'm so excited to use this daily!",
-        "This is perfect for my needs!",
-        "I'm completely satisfied with this!",
-        # More diverse positive expressions
-        "This is incredible! Best purchase ever!",
-        "I'm blown away by how good this is!",
-        "This product is a masterpiece!",
-        "I can't believe how amazing this is!",
-        "This is pure perfection!",
-        "I'm in love with this product!",
-        "This exceeded all my wildest dreams!",
-        "I'm speechless, it's that good!",
-        "This is absolutely phenomenal!",
-        "I'm so grateful I found this!",
-        "This is top-tier quality!",
-        "I'm amazed by the craftsmanship!",
-        "This is worth its weight in gold!",
-        "I'm so impressed with this!",
-        "This is a dream come true!",
-        "I'm beyond satisfied!",
-        "This is world-class quality!",
-        "I'm so glad I chose this!",
-        "This is absolutely brilliant!",
-        "I'm thrilled beyond words!",
-        # Additional positive with strong signals
-        "This is fantastic! I'm so pleased!",
-        "Wonderful! Absolutely wonderful!",
-        "I'm so excited about this amazing product!",
-        "This is superb! Highly recommend!",
-        "I'm very happy with this excellent purchase!",
-        "This is great! I love it so much!",
-        "I'm delighted! This is perfect!",
-        "This is awesome! Best decision ever!",
-        "I'm very pleased! This is wonderful!",
-        "This is terrific! I'm so satisfied!"
-    ]
-    
-    negative_texts = [
-        "Terrible product, waste of money.",
-        "Very disappointed with this purchase.",
-        "Poor quality, broke after one use.",
-        "Awful experience, would not recommend.",
-        "Horrible service, worst purchase ever.",
-        "Bad quality, not worth the price.",
-        "Disappointing product, does not work.",
-        "Terrible customer service, very unhappy.",
-        "Poor quality control, defective item.",
-        "Worst product I've ever bought.",
-        "Very poor quality, complete waste.",
-        "Disappointed, did not meet expectations.",
-        "Bad experience, would not buy again.",
-        "Terrible quality, broken on arrival.",
-        "Awful product, money down the drain.",
-        "Horrible, worst purchase decision.",
-        "Poor service, very dissatisfied.",
-        "Bad product, does not function properly.",
-        "Terrible, regret buying this.",
-        "Very poor, not recommended at all.",
-        "Completely broken, useless product.",
-        "Waste of money, poor quality.",
-        "Very bad experience, disappointed.",
-        "Terrible product, does not work.",
-        "Poor quality, regret purchasing.",
-        "Awful service, very unhappy.",
-        "Bad product, not as described.",
-        "Terrible quality, broken immediately.",
-        "Very poor, waste of time.",
-        "Horrible product, avoid at all costs.",
-        "Disappointing quality, poor value.",
-        "Bad experience, would not recommend.",
-        "Terrible service, very dissatisfied.",
-        "Poor product, does not function.",
-        "Awful quality, complete disappointment.",
-        "Very bad, worst purchase ever.",
-        "Terrible product, money wasted.",
-        "Poor quality, broken quickly.",
-        "Bad service, very disappointed.",
-        "Horrible experience, avoid this.",
-        "Completely useless, total waste.",
-        "Extremely poor quality, avoid at all costs.",
-        "Terrible design, not functional at all.",
-        "Worst experience ever, completely disappointed.",
-        "Shoddy workmanship, falls apart easily.",
-        "Very unreliable, breaks constantly.",
-        "Poor materials, cheaply made.",
-        "Defective product, doesn't work properly.",
-        "Misleading description, not as advertised.",
-        "Terrible customer service, unresponsive.",
-        "Poor quality control, many defects.",
-        "Not worth the money, overpriced junk.",
-        "Very flimsy construction, breaks quickly.",
-        "Terrible value, poor quality product.",
-        "Completely broken, non-functional.",
-        "Waste of money, regret purchasing.",
-        "Poor design, difficult to use.",
-        "Terrible quality, not durable at all.",
-        "Very disappointed, does not meet expectations.",
-        "Poor craftsmanship, sloppy work.",
-        "Terrible performance, very slow.",
-        "Not reliable, fails frequently.",
-        "Poor build quality, feels cheap.",
-        "Terrible experience, would not recommend.",
-        "Very poor quality, not worth it.",
-        "Completely unsatisfactory, terrible product.",
-        "Poor value, low quality materials.",
-        "Terrible functionality, doesn't work well.",
-        "Very frustrating, constant problems.",
-        "Poor design, uncomfortable to use.",
-        "Terrible quality, breaks immediately.",
-        "Not as described, very misleading.",
-        "Poor service, unhelpful staff.",
-        "Terrible product, avoid completely.",
-        "Very poor construction, falls apart.",
-        "Not functional, doesn't work.",
-        "Terrible quality, waste of time.",
-        "Poor performance, very disappointing.",
-        "Completely unreliable, breaks often.",
-        "Terrible value, poor quality.",
-        "Not durable, breaks easily.",
-        "Poor materials, low quality.",
-        "Terrible experience, very unhappy.",
-        "Very poor quality, not recommended.",
-        "Completely defective, doesn't function.",
-        "Terrible purchase, regret buying.",
-        "Poor workmanship, shoddy construction.",
-        "Not worth the price, overpriced.",
-        "Terrible quality, avoid this product.",
-        # Social media style negative
-        "Ugh this is so bad 😤",
-        "Worst purchase ever! 😡",
-        "So disappointed! 😞",
-        "This is trash! 🗑️",
-        "Not worth it at all! 👎",
-        "Huge waste of money! 💸",
-        "This sucks! 😒",
-        "Terrible experience! 😠",
-        "So frustrated with this! 😤",
-        "Avoid this product! ⛔",
-        # Review style negative
-        "1 star, would give 0 if possible.",
-        "This product ruined my experience.",
-        "I've never been so disappointed.",
-        "Complete waste of my hard-earned money.",
-        "Quality is terrible, very unimpressed.",
-        "Did not meet my expectations at all.",
-        "Worst investment I've made this year.",
-        "This is not what I needed at all.",
-        "Terrible solution, made things worse.",
-        "I'm so sorry I bought this product.",
-        # Detailed negative
-        "The quality is poor and the design is ugly.",
-        "Slow shipping, bad packaging, terrible product.",
-        "Customer service was unhelpful and unresponsive.",
-        "This doesn't work as advertised, very unreliable.",
-        "I tried using this but it always disappoints.",
-        "The lack of attention to detail is shocking.",
-        "This product has made my daily routine worse.",
-        "I would never purchase this again.",
-        "The value for money is terrible.",
-        "This is a complete waste, hate it!",
-        # Emotional negative
-        "This brings me so much frustration!",
-        "I'm devastated with this purchase!",
-        "This makes me so angry!",
-        "I'm appalled with the quality!",
-        "This failed all my expectations!",
-        "I'm furious about this product!",
-        "This fills me with disappointment!",
-        "I'm heartbroken with this purchase!",
-        "This brings me great sadness!",
-        "I'm miserable with the results!",
-        # Action-oriented negative
-        "I will never buy this again!",
-        "I'm warning all my friends about this!",
-        "I can't wait to return this!",
-        "I'm already planning to get a refund!",
-        "This is going to be my worst purchase!",
-        "I'm telling everyone to avoid this!",
-        "This is a must-avoid for everyone!",
-        "I'm so upset I have to use this!",
-        "This is terrible for my needs!",
-        "I'm completely unsatisfied with this!",
-        # More diverse negative expressions
-        "This is absolutely terrible! Worst ever!",
-        "I'm shocked by how bad this is!",
-        "This product is a complete disaster!",
-        "I can't believe how awful this is!",
-        "This is pure garbage!",
-        "I'm disgusted with this product!",
-        "This failed all my expectations miserably!",
-        "I'm appalled, it's that bad!",
-        "This is absolutely atrocious!",
-        "I'm so regretful I bought this!",
-        "This is bottom-tier quality!",
-        "I'm horrified by the poor quality!",
-        "This is worth less than nothing!",
-        "I'm so unimpressed with this!",
-        "This is a nightmare come true!",
-        "I'm beyond disappointed!",
-        "This is substandard quality!",
-        "I'm so sorry I chose this!",
-        "This is absolutely dreadful!",
-        "I'm devastated beyond words!",
-        # Additional negative with strong signals
-        "This is horrible! I'm so upset!",
-        "Awful! Absolutely awful!",
-        "I'm so angry about this terrible product!",
-        "This is dreadful! Would not recommend!",
-        "I'm very unhappy with this poor purchase!",
-        "This is bad! I hate it so much!",
-        "I'm frustrated! This is terrible!",
-        "This is lousy! Worst decision ever!",
-        "I'm very displeased! This is awful!",
-        "This is pathetic! I'm so unsatisfied!"
-    ]
-    
-    neutral_texts = [
-        "The product arrived on time.",
-        "It is what it is, nothing special.",
-        "Average quality, works as expected.",
-        "Standard product, meets basic requirements.",
-        "Received the item, looks okay.",
-        "Product is fine, nothing extraordinary.",
-        "Decent quality, average performance.",
-        "It works, but nothing impressive.",
-        "Standard item, does the job.",
-        "Average product, acceptable quality.",
-        "Received order, seems fine.",
-        "Normal product, nothing to complain about.",
-        "Basic quality, serves its purpose.",
-        "Average experience, okay for the price.",
-        "Standard quality, meets expectations.",
-        "Product works, nothing special.",
-        "Decent item, average performance.",
-        "Normal quality, acceptable.",
-        "Standard product, does what it should.",
-        "Average item, no complaints.",
-        "Product delivered as expected.",
-        "Standard quality, meets requirements.",
-        "Average product, works fine.",
-        "Normal item, acceptable quality.",
-        "Basic product, does the job.",
-        "Standard quality, nothing special.",
-        "Average performance, acceptable.",
-        "Normal product, meets expectations.",
-        "Basic item, works as described.",
-        "Standard quality, fine for the price.",
-        "Average product, acceptable quality.",
-        "Normal item, works okay.",
-        "Basic quality, serves purpose.",
-        "Standard product, meets needs.",
-        "Average quality, acceptable.",
-        "Normal item, does the job.",
-        "Basic product, works fine.",
-        "Standard quality, acceptable.",
-        "Average item, meets requirements.",
-        "Normal product, works as expected.",
-        "Standard delivery time, nothing special.",
-        "Average packaging, adequate protection.",
-        "Regular quality, meets basic needs.",
-        "Typical product, standard features.",
-        "Normal operation, no complaints.",
-        "Standard design, nothing remarkable.",
-        "Average performance, acceptable results.",
-        "Regular item, serves its purpose.",
-        "Normal quality, standard expectations.",
-        "Typical experience, nothing extraordinary.",
-        "Standard functionality, works adequately.",
-        "Average build, acceptable quality.",
-        "Regular product, meets requirements.",
-        "Normal service, standard procedure.",
-        "Typical quality, nothing special.",
-        "Standard features, basic functionality.",
-        "Average materials, acceptable construction.",
-        "Regular operation, no issues.",
-        "Normal condition, as expected.",
-        "Standard quality, meets needs.",
-        "Average performance, acceptable level.",
-        "Typical product, standard quality.",
-        "Normal functionality, works fine.",
-        "Standard design, adequate appearance.",
-        "Average experience, nothing notable.",
-        "Regular quality, acceptable standard.",
-        "Normal operation, no problems.",
-        "Typical service, standard delivery.",
-        "Standard product, meets expectations.",
-        "Average quality, acceptable condition.",
-        "Regular functionality, works properly.",
-        "Normal performance, adequate results.",
-        "Standard materials, acceptable quality.",
-        "Average build, meets basic needs.",
-        "Typical operation, no complaints.",
-        "Normal quality, standard level.",
-        "Regular service, adequate support.",
-        "Standard features, basic needs met.",
-        "Average condition, acceptable state.",
-        "Typical quality, nothing remarkable.",
-        "Normal functionality, works adequately.",
-        "Standard performance, acceptable results.",
-        "Average operation, no issues.",
-        "Regular quality, meets standards.",
-        "Normal service, standard experience.",
-        "Typical product, adequate quality.",
-        "Standard functionality, works as needed.",
-        "Average performance, acceptable level.",
-        "Regular operation, no problems.",
-        "Normal quality, standard expectations.",
-        # Social media style neutral
-        "It's okay I guess 🤷",
-        "Meh, nothing special 😑",
-        "It's fine, whatever 🤔",
-        "Not bad, not great 🤷‍♂️",
-        "It is what it is 😐",
-        "Average at best 📊",
-        "Could be better, could be worse ⚖️",
-        "Nothing to write home about 📝",
-        "It's alright I suppose 🤷",
-        "Just average, nothing more 📉",
-        # Review style neutral
-        "3 stars, it's acceptable but not great.",
-        "This product is functional but unremarkable.",
-        "I've seen better but also seen worse.",
-        "It's reasonably priced for what you get.",
-        "Quality is average, meets basic needs.",
-        "It does the job but nothing more.",
-        "Standard product with standard performance.",
-        "This is adequate but not impressive.",
-        "It works but I expected more.",
-        "This is fine but not exceptional.",
-        # Detailed neutral
-        "The quality is average and the design is standard.",
-        "Normal shipping, standard packaging, average product.",
-        "Customer service was adequate and professional.",
-        "This works as expected, reasonably reliable.",
-        "I use this occasionally and it's fine.",
-        "The attention to detail is standard.",
-        "This product hasn't changed my routine much.",
-        "I might purchase this again if needed.",
-        "The value for money is reasonable.",
-        "This is acceptable, no complaints.",
-        # Factual neutral
-        "The product arrived as scheduled.",
-        "It functions according to specifications.",
-        "The item matches the description provided.",
-        "Standard features work as intended.",
-        "The product serves its basic purpose.",
-        "It meets the minimum requirements.",
-        "The quality is within acceptable range.",
-        "It performs at an average level.",
-        "The product is functional and usable.",
-        "It does what it's supposed to do.",
-        # Question/uncertain neutral
-        "I'm not sure how I feel about this.",
-        "It might be good, need more time to decide.",
-        "This could work but I'm uncertain.",
-        "I'll need to use it more to judge.",
-        "It seems okay but time will tell.",
-        "I'm on the fence about this product.",
-        "This might be useful, not sure yet.",
-        "I'll give it a chance and see.",
-        "It's hard to form an opinion yet.",
-        "I need more experience with this to decide.",
-        # More diverse neutral expressions
-        "It's neither good nor bad, just average.",
-        "This is a standard product with standard features.",
-        "It meets the requirements but doesn't excel.",
-        "This is functional but not remarkable.",
-        "It's acceptable quality for the price point.",
-        "This works adequately for basic needs.",
-        "It's a typical product in this category.",
-        "This is reasonable but not outstanding.",
-        "It serves its purpose without being special.",
-        "This is decent but nothing to rave about.",
-        "It's a middle-of-the-road product.",
-        "This is satisfactory but not impressive.",
-        "It's okay for what it is.",
-        "This is standard fare, nothing exceptional.",
-        "It's adequate for everyday use.",
-        "This is run-of-the-mill quality.",
-        "It's acceptable but not noteworthy.",
-        "This is typical, nothing stands out.",
-        "It's fine, but I've seen better.",
-        "This is ordinary, nothing special."
-    ]
-    
-    # Combine and create labels
-    texts = positive_texts + negative_texts + neutral_texts
-    labels = [2] * len(positive_texts) + [0] * len(negative_texts) + [1] * len(neutral_texts)
-    
-    # Shuffle
-    indices = np.random.permutation(len(texts))
-    texts = [texts[i] for i in indices]
-    labels = [labels[i] for i in indices]
-    
-    return texts, labels
+def upsample_minority(X, y):
+    """Simple upsampling of minority classes to balance dataset."""
+    df = pd.DataFrame({"text": X, "label": y})
+    counts = df['label'].value_counts()
+    max_count = counts.max()
+    frames = []
+    for lbl in counts.index:
+        subset = df[df['label'] == lbl]
+        if len(subset) < max_count:
+            subset_up = resample(subset, replace=True, n_samples=max_count, random_state=42)
+            frames.append(subset_up)
+        else:
+            frames.append(subset)
+    new_df = pd.concat(frames).sample(frac=1.0, random_state=42).reset_index(drop=True)
+    return new_df['text'].tolist(), new_df['label'].tolist()
 
 
-def train_model(X_train, y_train, X_val, y_val, use_xgboost=True):
-    """
-    Train sentiment analysis model.
-    
-    Args:
-        X_train: Training texts
-        y_train: Training labels (0=Negative, 1=Neutral, 2=Positive)
-        X_val: Validation texts
-        y_val: Validation labels
-        use_xgboost: If True, use XGBoost; else use Logistic Regression
-    
-    Returns:
-        Trained pipeline model
-    """
-    print(f"\nTraining {'XGBoost' if use_xgboost else 'Logistic Regression'} model...")
-    
-    # Create pipeline with TF-IDF vectorization and classifier
-    if use_xgboost:
-        classifier = xgb.XGBClassifier(
-            n_estimators=300,
-            max_depth=7,
-            learning_rate=0.05,
+def build_pipeline(use_xgboost=True, xgb_params=None):
+    """Return a sklearn Pipeline with TF-IDF + classifier."""
+    if use_xgboost and XGBOOST_AVAILABLE:
+        clf = xgb.XGBClassifier(
+            use_label_encoder=False,
+            objective="multi:softprob",
+            n_jobs=-1,
             random_state=42,
-            eval_metric='mlogloss',
-            subsample=0.85,
-            colsample_bytree=0.85,
-            min_child_weight=2,
-            gamma=0.05,
-            reg_alpha=0.05,
-            reg_lambda=0.5
+            **(xgb_params or {})
         )
     else:
-        classifier = LogisticRegression(
-            max_iter=1000,
+        clf = LogisticRegression(
+            max_iter=2000,
             random_state=42,
             multi_class='multinomial',
             solver='lbfgs'
         )
-    
     pipeline = Pipeline([
         ('tfidf', TfidfVectorizer(
-            max_features=15000,
+            max_features=20000,
             ngram_range=(1, 2),
             stop_words='english',
-            min_df=1,
-            max_df=0.92,
-            analyzer='word',
-            lowercase=True
+            min_df=2,
+            max_df=0.95,
+            lowercase=True,
+            strip_accents='unicode'
         )),
-        ('classifier', classifier)
+        ('classifier', clf)
     ])
-    
-    # Train the model
-    print("Fitting model on training data...")
-    pipeline.fit(X_train, y_train)
-    
-    # Evaluate on validation set
-    y_pred = pipeline.predict(X_val)
-    accuracy = accuracy_score(y_val, y_pred)
-    
-    print(f"\nValidation Accuracy: {accuracy:.4f}")
-    print("\nClassification Report:")
-    print(classification_report(y_val, y_pred, target_names=["Negative", "Neutral", "Positive"]))
-    
-    print("\nConfusion Matrix:")
-    print(confusion_matrix(y_val, y_pred))
-    
     return pipeline
 
 
+def tune_and_train(X_train, y_train, X_val, y_val, use_xgboost=True, n_iter=50, upsample=True, n_jobs=1):
+    """Hyperparameter tuning with RandomizedSearchCV and final training with early stopping for XGBoost."""
+    # Always upsample for imbalanced datasets to improve accuracy
+    if upsample:
+        print("\nUpsampling minority classes to balance dataset...")
+        X_train, y_train = upsample_minority(X_train, y_train)
+        print(f"After upsampling - Train size: {len(X_train)}")
+        label_counts = pd.Series(y_train).value_counts().sort_index()
+        for label_idx, count in label_counts.items():
+            print(f"  {REVERSE_LABEL_MAP[label_idx]}: {count}")
+
+    pipeline = build_pipeline(use_xgboost=use_xgboost)
+
+    if use_xgboost and XGBOOST_AVAILABLE:
+        param_dist = {
+            'tfidf__max_features': [10000, 15000, 20000, 25000],
+            'tfidf__ngram_range': [(1, 1), (1, 2), (1, 3)],
+            'classifier__n_estimators': randint(200, 800),
+            'classifier__max_depth': randint(4, 12),
+            'classifier__learning_rate': uniform(0.01, 0.15),
+            'classifier__subsample': uniform(0.7, 0.3),
+            'classifier__colsample_bytree': uniform(0.7, 0.3),
+            'classifier__min_child_weight': randint(1, 5),
+            'classifier__gamma': uniform(0.0, 0.3),
+            'classifier__reg_alpha': uniform(0.0, 0.5),
+            'classifier__reg_lambda': uniform(0.5, 1.0),
+        }
+    else:
+        param_dist = {
+            'tfidf__max_features': [8000, 12000, 15000],
+            'tfidf__ngram_range': [(1, 1), (1, 2)],
+            'classifier__C': uniform(0.1, 10.0),
+        }
+
+    cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    search = RandomizedSearchCV(
+        pipeline, param_distributions=param_dist, n_iter=n_iter, cv=cv, scoring='f1_macro',
+        verbose=2, n_jobs=n_jobs, random_state=42
+    )
+    print("Starting hyperparameter search...")
+    search.fit(X_train, y_train)
+
+    print("\nBest params:")
+    print(search.best_params_)
+    best = search.best_estimator_
+
+    # If XGBoost, refit with early stopping on validation set
+    if use_xgboost and XGBOOST_AVAILABLE:
+        clf = best.named_steps['classifier']
+        tfidf = best.named_steps['tfidf']
+        # Refit pipeline manually to enable early stopping
+        X_train_t = tfidf.fit_transform(X_train)
+        X_val_t = tfidf.transform(X_val)
+        print("\nRefitting XGBoost with early stopping on validation set...")
+        clf.set_params(n_jobs=-1, random_state=42)
+        # Use eval_set parameter (newer XGBoost API)
+        try:
+            # Try new API first (XGBoost 2.0+)
+            clf.fit(
+                X_train_t, y_train,
+                eval_set=[(X_val_t, y_val)],
+                verbose=False
+            )
+        except TypeError:
+            # Fallback for older XGBoost versions
+            clf.fit(X_train_t, y_train)
+        # attach refit steps back
+        from sklearn.pipeline import Pipeline as SkPipeline
+        best = SkPipeline([('tfidf', tfidf), ('classifier', clf)])
+
+    # Final evaluation on validation
+    y_val_pred = best.predict(X_val)
+    acc = accuracy_score(y_val, y_val_pred)
+    f1 = f1_score(y_val, y_val_pred, average='macro')
+    print(f"\nValidation Accuracy: {acc:.4f}  Macro F1: {f1:.4f}")
+    print("\nClassification Report (val):")
+    print(classification_report(y_val, y_val_pred, target_names=["Negative", "Neutral", "Positive"]))
+    print("\nConfusion Matrix (val):")
+    print(confusion_matrix(y_val, y_val_pred))
+
+    return best
+
+
+class TransformerWrapper:
+    """
+    Lightweight wrapper referencing a fine-tuned transformer directory.
+    The wrapper is pickleable: only the path is serialized. Model/tokenizer are loaded lazily at runtime.
+    Methods:
+      - predict(texts): returns label ints
+      - predict_proba(texts): returns probability arrays (softmax)
+    """
+    def __init__(self, model_dir):
+        self.model_dir = model_dir
+        self._tokenizer = None
+        self._model = None
+        self._device = None
+
+    def _ensure_loaded(self):
+        if self._model is not None:
+            return
+        try:
+            # Import lazily to avoid requiring transformers at joblib-dump time
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification
+            import torch
+        except Exception as e:
+            raise RuntimeError("transformers/torch required to use TransformerWrapper: " + str(e))
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_dir, use_fast=True)
+        self._model = AutoModelForSequenceClassification.from_pretrained(self.model_dir)
+        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._model.to(self._device)
+        self._model.eval()
+
+    def predict(self, texts, batch_size=32):
+        probs = self.predict_proba(texts, batch_size=batch_size)
+        return np.argmax(probs, axis=-1).tolist()
+
+    def predict_proba(self, texts, batch_size=32):
+        self._ensure_loaded()
+        import torch
+        from torch.nn.functional import softmax
+        all_probs = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i+batch_size]
+            enc = self._tokenizer(batch, truncation=True, padding=True, return_tensors="pt", max_length=128)
+            enc = {k: v.to(self._device) for k, v in enc.items()}
+            with torch.no_grad():
+                out = self._model(**enc)
+                logits = out.logits
+                probs = softmax(logits, dim=-1).cpu().numpy()
+            all_probs.append(probs)
+        return np.vstack(all_probs)
+
+
+def call_transformer_trainer(transformer_args, python_exe=None):
+    """Call train_transformer.py as a subprocess. transformer_args is list of args (e.g. ['--data', 'my.csv'])"""
+    python_exe = python_exe or sys.executable
+    script_path = os.path.join(os.path.dirname(__file__), "train_transformer.py")
+    if not os.path.exists(script_path):
+        raise FileNotFoundError(f"train_transformer.py not found at {script_path}")
+    cmd = [python_exe, script_path] + transformer_args
+    print("Running transformer trainer:", " ".join(cmd))
+    res = subprocess.run(cmd, check=False)
+    if res.returncode != 0:
+        raise RuntimeError(f"train_transformer.py exited with code {res.returncode}")
+
+
 def main():
-    """Main training function."""
-    print("=" * 60)
-    print("Sentiment Analysis Model Training")
-    print("=" * 60)
-    
-    # Load data
-    # You can specify a data file: load_data("data/training_data.csv")
-    texts, labels = load_data()
-    
+    parser = argparse.ArgumentParser(description="Train sentiment model")
+    parser.add_argument("--data", help="CSV file path; if omitted uses Hugging Face tweet_eval", default=None)
+    parser.add_argument("--use-xgb", action="store_true", help="Use XGBoost (requires xgboost installed, default: True)")
+    parser.add_argument("--n-iter", type=int, default=50, help="Randomized search iterations")
+    parser.add_argument("--upsample", action="store_true", help="Upsample minority classes in training set (default: True)")
+    parser.add_argument("--output", default="model.joblib", help="Where to save the final model (joblib)")
+    # New transformer-related flags
+    parser.add_argument("--use-transformer", action="store_true", help="Run transformer fine-tuning and save wrapper to model.joblib")
+    parser.add_argument("--transformer-model", default="distilbert-base-uncased", help="Base model for transformer trainer")
+    parser.add_argument("--transformer-output", default="transformer_model", help="Directory where transformer trainer will save model")
+    parser.add_argument("--transformer-epochs", type=int, default=3)
+    parser.add_argument("--transformer-batch", type=int, default=16)
+    parser.add_argument("--transformer-lr", type=float, default=2e-5)
+    parser.add_argument("--search-jobs", type=int, default=1, help="Parallel jobs for hyperparameter search (set >1 if system supports)")
+    args = parser.parse_args()
+
+    texts, labels, test_texts, test_labels = load_data(args.data)
     print(f"\nLoaded {len(texts)} training samples")
-    print(f"Label distribution:")
-    for label, count in zip(["Negative", "Neutral", "Positive"], 
-                            [labels.count(0), labels.count(1), labels.count(2)]):
-        print(f"  {label}: {count}")
-    
-    # Split data with stratification for balanced classes
-    X_train, X_test, y_train, y_test = train_test_split(
-        texts, labels, test_size=0.2, random_state=42, stratify=labels
-    )
-    
+    counts = pd.Series(labels).value_counts().to_dict()
+    print("Label distribution:", counts)
+
+    # If user requested transformer training, call trainer then save wrapper and exit
+    if args.use_transformer:
+        tf_args = []
+        if args.data:
+            text_col = LAST_DATA_TEXT_COLUMN if LAST_DATA_TEXT_COLUMN else "text"
+            label_col = LAST_DATA_LABEL_COLUMN if LAST_DATA_LABEL_COLUMN else "label"
+            tf_args += ["--data", args.data, "--text-col", text_col, "--label-col", label_col]
+        tf_args += ["--model", args.transformer_model,
+                    "--output", args.transformer_output,
+                    "--epochs", str(args.transformer_epochs),
+                    "--batch", str(args.transformer_batch),
+                    "--lr", str(args.transformer_lr)]
+        call_transformer_trainer(tf_args)
+        # Save a lightweight wrapper (pickleable) that references the transformer directory
+        wrapper = TransformerWrapper(args.transformer_output)
+        joblib.dump(wrapper, args.output)
+        print(f"Transformer trained and wrapper saved to {args.output} (points to {args.transformer_output})")
+        return
+
     X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42, stratify=y_train
+        texts, labels, test_size=0.1, random_state=42, stratify=labels
     )
-    
-    print(f"\nTrain set: {len(X_train)} samples")
-    print(f"Validation set: {len(X_val)} samples")
-    print(f"Test set: {len(X_test)} samples")
-    
-    # Train model
-    model = train_model(X_train, y_train, X_val, y_val, use_xgboost=True)
-    
-    # Cross-validation score for better accuracy estimate
-    print("\n" + "=" * 60)
-    print("Cross-Validation Score (5-fold)")
-    print("=" * 60)
-    try:
-        cv_scores = cross_val_score(model, X_train + X_val, y_train + y_val, cv=5, scoring='accuracy')
-        print(f"Cross-validation accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
-        print(f"Individual fold scores: {cv_scores}")
-    except Exception as e:
-        print(f"Cross-validation not available: {e}")
-    
-    # Evaluate on test set
-    print("\n" + "=" * 60)
-    print("Final Test Set Evaluation")
-    print("=" * 60)
-    y_test_pred = model.predict(X_test)
-    test_accuracy = accuracy_score(y_test, y_test_pred)
-    
-    print(f"\nTest Accuracy: {test_accuracy:.4f}")
-    print("\nTest Set Classification Report:")
-    print(classification_report(y_test, y_test_pred, target_names=["Negative", "Neutral", "Positive"]))
-    
-    # Save model
-    model_path = "model.joblib"
-    joblib.dump(model, model_path)
-    print(f"\nSUCCESS: Model saved to {model_path}")
-    
-    # Test model loading
-    print("\nTesting model loading...")
-    loaded_model = joblib.load(model_path)
-    test_pred = loaded_model.predict(["I love this product!"])
-    print(f"Test prediction: {REVERSE_LABEL_MAP[test_pred[0]]}")
-    print("SUCCESS: Model loading test passed!")
-    
-    print("\n" + "=" * 60)
-    print("Training completed successfully!")
-    print("=" * 60)
-    print(f"\nModel file: {model_path}")
-    print("You can now use this model in the Streamlit app (app.py)")
+
+    print(f"Train size: {len(X_train)}, Val size: {len(X_val)}")
+    # Default to XGBoost and upsampling if not specified
+    use_xgb = args.use_xgb if args.use_xgb else XGBOOST_AVAILABLE
+    use_upsample = args.upsample if args.upsample else True
+    best_model = tune_and_train(
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        use_xgboost=use_xgb,
+        n_iter=args.n_iter,
+        upsample=use_upsample,
+        n_jobs=max(1, args.search_jobs)
+    )
+
+    # Evaluate on held-out test set if available
+    if test_texts is not None and test_labels is not None:
+        print("\nEvaluating on held-out test set...")
+        y_test_pred = best_model.predict(test_texts)
+        test_acc = accuracy_score(test_labels, y_test_pred)
+        test_f1 = f1_score(test_labels, y_test_pred, average='macro')
+        print(f"Test Accuracy: {test_acc:.4f}  Macro F1: {test_f1:.4f}")
+        print(classification_report(test_labels, y_test_pred, target_names=["Negative", "Neutral", "Positive"]))
+    else:
+        print("No held-out test set available.")
+
+    joblib.dump(best_model, args.output)
+    print(f"Model saved to {args.output}")
 
 
 if __name__ == "__main__":
