@@ -67,3 +67,11 @@ pyrightconfig.json
 data/
 *.csv
 *.tsv
+
+# DB
+*.db
+*.sqlite3
+
+# Scratch
+trim_app.py
+diff.txt

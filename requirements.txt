@@ -8,10 +8,11 @@ matplotlib
 numpy
 xgboost
 wordcloud
-# FastAPI and uvicorn (optional - not needed for Streamlit app)
-# fastapi
-# uvicorn
-# python-multipart
+# FastAPI and uvicorn (Backend API)
+fastapi
+uvicorn
+python-multipart
+sqlalchemy
 transformers>=4.30.0
 torch>=2.0.0
 Pillow>=9.0.0

@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import requests
 import os
 import platform
 import re
@@ -52,17 +53,8 @@ except (ImportError, Exception):
     YOUTUBE_DL_AVAILABLE = False
     YoutubeCommentDownloader = None
 
-# Try to import transformers for better sentiment analysis
-TRANSFORMERS_AVAILABLE = False
-try:
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification
-    import torch
-    # Test if torch actually works (sometimes DLL issues on Windows)
-    _ = torch.__version__
-    TRANSFORMERS_AVAILABLE = True
-except (ImportError, OSError, Exception) as e:
-    TRANSFORMERS_AVAILABLE = False
-    print(f"Transformers not available: {e}")
+
+# All ML model initialization has been moved to the FastAPI backend
 
 # Try to import wordcloud and matplotlib for visualization
 try:
@@ -80,191 +72,10 @@ try:
     from PIL import Image
     import io
     OCR_AVAILABLE = True
-    # Initialize EasyOCR reader (lazy loading - will initialize on first use)
     ocr_reader = None
 except ImportError:
     OCR_AVAILABLE = False
     ocr_reader = None
-
-# Transformer-based sentiment analysis model wrapper
-class TransformerSentimentModel:
-    """Wrapper class for transformer-based sentiment analysis that mimics sklearn pipeline interface."""
-    
-    def __init__(self, model_name="cardiffnlp/twitter-roberta-base-sentiment-latest"):
-        self.model_name = model_name
-        self.tokenizer = None
-        self.model = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.label_map = {}  # Will be populated from model config
-        self.label_to_num = {"Negative": 0, "Neutral": 1, "Positive": 2}
-        self._load_model()
-    
-    def _load_model(self):
-        """Load the transformer model and tokenizer."""
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
-            self.model.to(self.device)
-            self.model.eval()
-            
-            # Get label mappings from model config
-            if hasattr(self.model.config, 'id2label'):
-                self.label_map = self.model.config.id2label
-            else:
-                # Fallback to default mapping for cardiffnlp model
-                self.label_map = {0: "LABEL_0", 1: "LABEL_1", 2: "LABEL_2"}
-            
-            # Create reverse mapping from label names to our numeric format
-            # The model typically outputs: Negative=0, Neutral=1, Positive=2
-            # But we need to check the actual label names
-            self.num_to_label = {}
-            for idx, label_name in self.label_map.items():
-                if isinstance(label_name, str):
-                    label_lower = label_name.lower()
-                    if "neg" in label_lower:
-                        self.num_to_label[idx] = 0  # Negative
-                    elif "neu" in label_lower or "neutral" in label_lower:
-                        self.num_to_label[idx] = 1  # Neutral
-                    elif "pos" in label_lower:
-                        self.num_to_label[idx] = 2  # Positive
-                    else:
-                        # Default mapping by index
-                        self.num_to_label[idx] = idx
-                else:
-                    self.num_to_label[idx] = idx
-            
-        except Exception as e:
-            raise RuntimeError(f"Failed to load transformer model: {e}")
-    
-    def predict(self, texts):
-        """Predict sentiment labels for a list of texts. Returns list of integers (0=Negative, 1=Neutral, 2=Positive)."""
-        if isinstance(texts, str):
-            texts = [texts]
-        
-        if not texts:
-            return []
-        
-        try:
-            # Tokenize inputs
-            inputs = self.tokenizer(
-                texts,
-                padding=True,
-                truncation=True,
-                max_length=512,
-                return_tensors="pt"
-            ).to(self.device)
-            
-            # Get predictions
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
-                predicted_labels = predictions.argmax(dim=-1)
-            
-            # Convert to numpy and map to our label format
-            predicted_labels = predicted_labels.cpu().numpy()
-            
-            # Map transformer labels to our format (0=Negative, 1=Neutral, 2=Positive)
-            results = []
-            for idx in predicted_labels:
-                mapped_label = self.num_to_label.get(int(idx), 1)  # Default to Neutral if mapping fails
-                results.append(mapped_label)
-            
-            return results
-        except Exception as e:
-            # Fallback: return neutral predictions if error occurs
-            return [1] * len(texts)
-    
-    def predict_proba(self, texts):
-        """Predict sentiment probabilities for a list of texts. Returns numpy array of shape (n_samples, 3)."""
-        if isinstance(texts, str):
-            texts = [texts]
-        
-        if not texts:
-            return np.array([])
-        
-        try:
-            # Tokenize inputs
-            inputs = self.tokenizer(
-                texts,
-                padding=True,
-                truncation=True,
-                max_length=512,
-                return_tensors="pt"
-            ).to(self.device)
-            
-            # Get predictions
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                probabilities = torch.nn.functional.softmax(outputs.logits, dim=-1)
-            
-            # Convert to numpy and ensure correct order: [Negative, Neutral, Positive]
-            probs = probabilities.cpu().numpy()
-            
-            # Reorder to match our label format [Negative, Neutral, Positive]
-            # The model outputs probabilities for each label, we need to map them correctly
-            reordered_probs = np.zeros((len(texts), 3))
-            for i in range(len(texts)):
-                # Map probabilities from model output indices to our format
-                for model_idx in range(len(probs[i])):
-                    our_idx = self.num_to_label.get(model_idx, 1)  # Default to Neutral position
-                    if 0 <= our_idx < 3:
-                        reordered_probs[i][our_idx] = probs[i][model_idx]
-            
-            return reordered_probs
-        except Exception as e:
-            # Fallback: return uniform probabilities if error occurs
-            return np.ones((len(texts), 3)) / 3.0
-
-
-# Load sentiment model for dataset/social media (resilient)
-def _try_load_model(path="model.joblib"):
-    try:
-        return joblib.load(path)
-    except Exception:
-        return None
-
-def _load_transformer_model():
-    """Load transformer-based sentiment model if available."""
-    if not TRANSFORMERS_AVAILABLE:
-        print("WARNING: Transformers library not available. Install with: pip install transformers torch")
-        return None
-    
-    try:
-        print("Attempting to load transformer model (cardiffnlp/twitter-roberta-base-sentiment-latest)...")
-        print("   This may take a few minutes on first run (~500MB download)...")
-        model = TransformerSentimentModel()
-        print("SUCCESS: Transformer model loaded successfully!")
-        return model
-    except Exception as e:
-        # Don't use st.warning here as it may be called before Streamlit is initialized
-        import traceback
-        print(f"ERROR: Transformer model loading failed: {e}")
-        print(f"   Error details: {traceback.format_exc()}")
-        print("   Will try to use fallback model or TextBlob.")
-        return None
-
-# Initialize models - try transformer first, then fallback to joblib
-transformer_pipe = None
-pipe = _try_load_model()
-
-# Try to load transformer model at startup if available
-if TRANSFORMERS_AVAILABLE and transformer_pipe is None:
-    try:
-        print("Initializing transformer model at startup...")
-        transformer_pipe = _load_transformer_model()
-        if transformer_pipe is not None:
-            print("SUCCESS: Transformer model loaded successfully at startup!")
-    except Exception as e:
-        print(f"WARNING: Could not load transformer model at startup: {e}")
-        transformer_pipe = None
-
-# Use transformer model if available, otherwise use joblib model
-if transformer_pipe is not None:
-    active_pipe = transformer_pipe
-elif pipe is not None:
-    active_pipe = pipe
-else:
-    active_pipe = None
 
 labels = {0: "Negative", 1: "Neutral", 2: "Positive"}
 
@@ -329,117 +140,78 @@ def map_sentiment_label(label):
     return "Neutral"
 
 def predict_sentiment(texts):
-    """Predict sentiment using available model or TextBlob fallback."""
+    """Predict sentiment via the FastAPI backend API with batching."""
     if isinstance(texts, str):
         texts = [texts]
     
-    if active_pipe is not None:
-        # Use the loaded model (transformer or joblib)
-        return active_pipe.predict(texts)  # type: ignore
-    else:
-        # Fallback to TextBlob
-        results = []
-        for text in texts:
-            sentiment = analyze_sentiment_textblob(text)
-            # Convert TextBlob labels to numeric: Negative=0, Neutral=1, Positive=2
-            if sentiment == "Positive":
-                results.append(2)
-            elif sentiment == "Negative":
-                results.append(0)
+    batch_size = 50
+    results = []
+    
+    try:
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i+batch_size]
+            response = requests.post("http://127.0.0.1:8000/predict", json={"texts": batch}, timeout=60)
+            if response.status_code == 200:
+                predictions = response.json().get("predictions", [])
+                # Map text labels back to integers for UI compatibility
+                text_to_num = {"Negative": 0, "Neutral": 1, "Positive": 2}
+                results.extend([text_to_num.get(p, 1) for p in predictions])
             else:
-                results.append(1)
+                results.extend([1] * len(batch))
         return results
+    except Exception as e:
+        if len(results) == 0:
+            st.error(f"Backend API Error: {e}")
+            
+    # Absolute fallback if API fails for remaining
+    remaining = len(texts) - len(results)
+    if remaining > 0:
+        results.extend([1] * remaining)
+    return results
 
 def predict_proba_sentiment(texts):
-    """Predict sentiment probabilities using available model or TextBlob fallback."""
+    """Predict sentiment probabilities via the FastAPI backend with batching."""
     if isinstance(texts, str):
         texts = [texts]
     
-    if active_pipe is not None and hasattr(active_pipe, 'predict_proba'):
-        # Use the loaded model's predict_proba
-        return active_pipe.predict_proba(texts)  # type: ignore
-    elif transformer_pipe is not None and hasattr(transformer_pipe, 'predict_proba'):
-        return transformer_pipe.predict_proba(texts)
-    else:
-        # Fallback to TextBlob - estimate probabilities
-        results = []
-        for text in texts:
-            blob = TextBlob(text)
-            polarity = blob.sentiment.polarity  # type: ignore
-            # Convert polarity (-1 to 1) to probabilities
-            if polarity > 0.05:
-                # Positive
-                results.append([0.1, 0.2, 0.7])  # [Negative, Neutral, Positive]
-            elif polarity < -0.05:
-                # Negative
-                results.append([0.7, 0.2, 0.1])  # [Negative, Neutral, Positive]
+    batch_size = 50
+    results = []
+    
+    try:
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i+batch_size]
+            response = requests.post("http://127.0.0.1:8000/predict", json={"texts": batch}, timeout=60)
+            if response.status_code == 200:
+                probs = response.json().get("probabilities", [])
+                if probs:
+                    results.extend(probs)
+                else:
+                    results.extend([[0.2, 0.6, 0.2]] * len(batch))
             else:
-                # Neutral
-                results.append([0.2, 0.6, 0.2])  # [Negative, Neutral, Positive]
-        return np.array(results)
+                results.extend([[0.2, 0.6, 0.2]] * len(batch))
+        
+        if results:
+            return np.array(results)
+    except:
+        pass
+    
+    # Fallback to neutral probabilities if API fails for remaining
+    remaining = len(texts) - len(results)
+    if remaining > 0:
+        results.extend([[0.2, 0.6, 0.2]] * remaining)
+    
+    return np.array(results)
 
 def ensure_model_ui():
-    """In-UI helper: if no model loaded, prompt user to upload one."""
-    global active_pipe, transformer_pipe, pipe
-    
-    # Try to load transformer model first (preferred, lazy loading)
-    if transformer_pipe is None:
-        # Always try to load transformer if available, even if TRANSFORMERS_AVAILABLE check failed earlier
-        if TRANSFORMERS_AVAILABLE:
-            try:
-                with st.spinner("Loading transformer model (first time may take a moment to download ~500MB)..."):
-                    transformer_pipe = _load_transformer_model()
-                    if transformer_pipe is not None:
-                        active_pipe = transformer_pipe
-                        st.success("✅ Transformer model loaded successfully!")
-                        return True
-                    else:
-                        st.info("⚠️ Transformer model could not be loaded. Will use TextBlob for sentiment analysis.")
-            except Exception as e:
-                st.warning(f"Could not load transformer model: {e}. Will use TextBlob for sentiment analysis.")
-        else:
-            # Try one more time to import transformers (in case it works now)
-            try:
-                from transformers import AutoTokenizer, AutoModelForSequenceClassification
-                import torch
-                with st.spinner("Loading transformer model (first time may take a moment to download ~500MB)..."):
-                    transformer_pipe = _load_transformer_model()
-                    if transformer_pipe is not None:
-                        active_pipe = transformer_pipe
-                        st.success("✅ Transformer model loaded successfully!")
-                        return True
-            except Exception:
-                st.info("ℹ️ Transformer model not available. Using TextBlob for sentiment analysis.")
-    
-    # If transformer model is available, we're good
-    if transformer_pipe is not None:
-        active_pipe = transformer_pipe
-        return True
-    
-    # If joblib model is available, use it
-    if pipe is not None:
-        active_pipe = pipe
-        return True
-    
-    # No model available - use TextBlob as fallback and show info
-    st.info("📊 Using TextBlob for sentiment analysis. For better accuracy, the transformer model will be loaded automatically when available.")
-    st.caption("Note: Transformer model requires ~500MB download on first use. If you have a trained model.joblib file, you can upload it below.")
-    
-    # Allow uploading joblib model as fallback
-    uploaded = st.file_uploader("Upload model.joblib (optional, transformer model is preferred)", type=["joblib", "pkl"], key="model_uploader")
-    if uploaded is not None:
-        try:
-            uploaded.seek(0)
-            buf = io.BytesIO(uploaded.read())
-            pipe = joblib.load(buf)
-            active_pipe = pipe
-            st.success("Custom model loaded successfully.")
+    """In-UI helper: check if backend API is reachable."""
+    try:
+        res = requests.get("http://127.0.0.1:8000/", timeout=5)
+        if res.status_code == 200:
             return True
-        except Exception as e:
-            st.error(f"Failed to load uploaded model: {e}")
-            return False
-    
-    # Return True even without model - we'll use TextBlob as fallback
+    except requests.exceptions.RequestException:
+        st.error("❌ Backend API is not reachable. Please ensure the FastAPI server is running on port 8000.")
+        st.info("Run: `uvicorn backend.main:app --reload` in your terminal.")
+        return False
     return True
 
  # Health-check server using builtin http.server so hosting platforms can probe readiness
@@ -636,20 +408,32 @@ st.set_page_config(page_title="Social Media Sentiment Analyzer", layout="centere
 st.markdown(
     """
     <style>
-    body {background-color: #f5f6fa;}
-    .main {background-color: #fff; border-radius: 12px; padding: 2rem;}
-    .stButton>button {background-color: #0066cc; color: white; border-radius: 6px;}
-    .stFileUploader {border-radius: 6px;}
-    .stTextInput>div>div>input {border-radius: 6px;}
-    .stTextArea>div>textarea {border-radius: 6px;}
-    .stDataFrame {background-color: #f9f9f9; border-radius: 6px;}
-    .stAlert {border-radius: 6px;}
-    .st-bb {background: #0066cc !important; color: white !important;}
-    .stApp {padding-bottom: 60px;}
-    .footer {position: fixed; left: 0; bottom: 0; width: 100%; background: #f5f6fa; color: #888; text-align: center; padding: 10px 0; font-size: 0.9rem;}
-    .branding {display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem;}
-    .branding img {height: 48px;}
-    .branding-title {font-size: 2.1rem; font-weight: 700; color: #0066cc; letter-spacing: 1px;}
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+    * { font-family: 'Roboto', sans-serif !important; }
+    body, .stApp { background-color: #f8f9fa !important; color: #334155; }
+    .main { 
+        background-color: #ffffff !important; 
+        border: 1px solid #e2e8f0; 
+        border-radius: 8px; padding: 2rem; 
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06); 
+    }
+    h1, h2, h3, h4 { color: #0f172a !important; font-weight: 700; }
+    h1 { color: #1e3a8a !important; text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; margin-bottom: 20px; }
+    .stButton>button { 
+        background-color: #2563eb !important; 
+        color: #ffffff !important; font-weight: 500; border-radius: 4px; border: 1px solid #1d4ed8; 
+        padding: 0.5rem 1.5rem; transition: background-color 0.2s ease; 
+    }
+    .stButton>button:hover { background-color: #1d4ed8 !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+    .stFileUploader>div>div { background-color: #f8fafc !important; border: 1px dashed #cbd5e1 !important; border-radius: 6px; }
+    .stTextInput>div>div>input, .stTextArea>div>textarea { background-color: #ffffff !important; color: #334155 !important; border: 1px solid #cbd5e1; border-radius: 4px; }
+    .stTextInput>div>div>input:focus, .stTextArea>div>textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 1px #2563eb; }
+    .stMetric { background-color: #ffffff; padding: 1rem; border-radius: 6px; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+    .stMetric label { color: #64748b !important; font-size: 0.875rem !important; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stMetric [data-testid="stMetricValue"] { color: #0f172a !important; font-weight: 700 !important; font-size: 1.8rem !important; }
+    .stDataFrame { border: 1px solid #e2e8f0; border-radius: 4px; }
+    div[data-testid="stSidebar"] { background-color: #f1f5f9 !important; border-right: 1px solid #e2e8f0; }
+    .stAlert { border-radius: 4px; border-left: 4px solid #2563eb; background-color: #eff6ff; color: #1e3a8a; }
     </style>
     """,
     unsafe_allow_html=True
@@ -665,25 +449,26 @@ mode = st.sidebar.selectbox(
         "Analyze Social Media Link",
         "Analyze Image/Screenshot",
         "Accuracy Meter/Validation",
-        "Manual Text Input"
+        "Manual Text Input",
+        "Prediction History (Database)"
     ],
     key="mode_selectbox"
 )
 
 # Add Model Info section
 st.sidebar.markdown("---")
-st.sidebar.header("📊 Model Info")
-if transformer_pipe is not None:
-    st.sidebar.success("✅ Transformer Model Active")
-    st.sidebar.caption("Model: RoBERTa-base<br>Fine-tuned for sentiment<br>High accuracy", unsafe_allow_html=True)
-    st.sidebar.info("💡 **Using state-of-the-art transformer model!**")
-elif active_pipe is not None:
-    st.sidebar.success("✅ Model Loaded")
-    st.sidebar.caption("Model type: Custom trained model<br>Features: TF-IDF + N-grams", unsafe_allow_html=True)
-    st.sidebar.info("💡 **Tip:** Transformer model available for better accuracy!")
-else:
-    st.sidebar.info("📊 Using TextBlob")
-    st.sidebar.caption("Transformer model will load automatically<br>or upload 'model.joblib'", unsafe_allow_html=True)
+st.sidebar.header("📊 Backend Server Status")
+try:
+    # Quick check if backend is up
+    _res = requests.get("http://127.0.0.1:8000/", timeout=2)
+    if _res.status_code == 200:
+        st.sidebar.success("✅ FastAPI Backend Active")
+        st.sidebar.caption("Status: Online<br>Database connected", unsafe_allow_html=True)
+    else:
+        st.sidebar.warning("⚠️ Backend returned unexpected status")
+except:
+    st.sidebar.error("❌ Backend Offline")
+    st.sidebar.caption("Please start the FastAPI server on port 8000")
 
 # Add OCR Info section
 st.sidebar.markdown("---")
@@ -1378,9 +1163,9 @@ if mode == "Analyze Dataset":
                     st.warning("⚠️ No valid text entries found after filtering. Please check your dataset.")
                     st.stop()
                 
-                # Ensure model is loaded before prediction
-                if active_pipe is None:
-                    st.error("Model not available. Please ensure a model is loaded.")
+                # Ensure model is ready (delegated to backend)
+                if not ensure_model_ui():
+                    st.error("Backend API is unreachable.")
                     st.stop()
                 
                 head_preds = predict_sentiment(head_texts)
@@ -1712,19 +1497,11 @@ elif mode == "Analyze Image/Screenshot":
                         st.warning("No valid text found after cleaning. Cannot analyze sentiment.")
                     else:
                         # Get predictions
-                        if active_pipe is not None:
-                            # Use model for prediction
-                            prediction = active_pipe.predict([cleaned_text])[0]  # type: ignore
-                            
-                            # Get probabilities if available
-                            if hasattr(active_pipe, 'predict_proba'):
-                                probas = active_pipe.predict_proba([cleaned_text])[0]  # type: ignore
-                            elif transformer_pipe is not None:
-                                probas = transformer_pipe.predict_proba([cleaned_text])[0]
-                            else:
-                                probas = np.array([0.33, 0.33, 0.34])
-                            
-                            sentiment_label = labels[prediction]  # type: ignore
+                        if ensure_model_ui():
+                            # Call the new FastAPI backend seamlessly
+                            pred_int = predict_sentiment([cleaned_text])[0]
+                            sentiment_label = labels[pred_int]
+                            probas = predict_proba_sentiment([cleaned_text])[0]
                             confidence = probas.max() * 100
                             
                             # Display results
@@ -1767,8 +1544,8 @@ elif mode == "Analyze Image/Screenshot":
                                 for i, text_segment in enumerate(extracted_texts, 1):
                                     cleaned_segment = clean_text(text_segment)
                                     if cleaned_segment.strip():
-                                        seg_pred = active_pipe.predict([cleaned_segment])[0]  # type: ignore
-                                        seg_label = labels[seg_pred]  # type: ignore
+                                        seg_pred_int = predict_sentiment([cleaned_segment])[0]
+                                        seg_label = labels[seg_pred_int]
                                         segment_results.append({
                                             "Segment": i,
                                             "Text": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
@@ -1785,13 +1562,10 @@ elif mode == "Analyze Image/Screenshot":
                                     if not seg_counts.empty:
                                         st.bar_chart(seg_counts)
                         else:
-                            # Fallback to TextBlob
-                            st.warning("Model not available. Using TextBlob for basic sentiment analysis.")
-                            sentiment = analyze_sentiment_textblob(cleaned_text)
-                            st.metric("Sentiment", sentiment)
+                            st.warning("Backend API unreachable.")
                 
                 # Download results (only if analysis was performed)
-                if full_text.strip() and active_pipe is not None:
+                if full_text.strip():
                     st.markdown("---")
                     st.markdown("### 💾 Download Results")
                     try:
@@ -1933,12 +1707,10 @@ elif mode == "Accuracy Meter/Validation":
                 
                 # Predict sentiments
                 with st.spinner("Predicting sentiments..."):
-                    if active_pipe is not None:
-                        predicted_numeric = active_pipe.predict(texts)  # type: ignore
-                        predicted_labels = [labels[p] for p in predicted_numeric]  # type: ignore
-                    else:
-                        st.error("Model not available. Please ensure a model is loaded.")
+                    if not ensure_model_ui():
                         st.stop()
+                    predicted_numeric = predict_sentiment(texts)
+                    predicted_labels = [labels[p] for p in predicted_numeric]
                 
                 # Calculate metrics
                 with st.spinner("Calculating accuracy metrics..."):
@@ -2100,3 +1872,45 @@ elif mode == "Manual Text Input":
                 st.info(f"⚠️ Moderate confidence prediction")
             else:
                 st.warning(f"⚠️ Low confidence prediction - results may be unreliable")
+
+# ----------- Mode 6: Prediction History (Database) -----------
+elif mode == "Prediction History (Database)":
+    st.subheader("🗄️ Prediction History (Database)")
+    st.markdown("View the history of all texts analyzed by the system, saved automatically in our local SQLite database.")
+    
+    try:
+        response = requests.get("http://127.0.0.1:8000/history?limit=100", timeout=10)
+        if response.status_code == 200:
+            history = response.json()
+            if not history:
+                st.info("No predictions found in the database yet. Try analyzing some text!")
+            else:
+                df_history = pd.DataFrame(history)
+                # If emotion exists in the database response, add it to the view
+                columns_to_show = ["id", "timestamp", "sentiment"]
+                if "emotion" in df_history.columns:
+                    columns_to_show.append("emotion")
+                columns_to_show.append("text")
+                st.dataframe(df_history[columns_to_show], use_container_width=True, hide_index=True)
+                
+                # Show quick pie chart of historical counts
+                st.markdown("### 📊 Historical Analytics")
+                import plotly.express as px
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    counts = df_history["sentiment"].value_counts().reset_index()
+                    counts.columns = ["sentiment", "count"]
+                    fig = px.pie(counts, values='count', names='sentiment', title='Sentiment Distribution', color='sentiment', color_discrete_map={'Positive':'#2ecc71','Neutral':'#f1c40f','Negative':'#e74c3c'})
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    if "emotion" in df_history.columns:
+                        em_counts = df_history["emotion"].value_counts().reset_index()
+                        em_counts.columns = ["emotion", "count"]
+                        fig_em = px.pie(em_counts, values='count', names='emotion', hole=0.3, title='Emotion Distribution', color_discrete_sequence=px.colors.qualitative.Pastel)
+                        st.plotly_chart(fig_em, use_container_width=True)
+        else:
+            st.error(f"Failed to fetch history: {response.text}")
+    except Exception as e:
+        st.error(f"Database unreachable. Please ensure FastAPI server is running. Error: {e}")
