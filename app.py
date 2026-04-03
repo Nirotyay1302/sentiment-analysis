@@ -16,19 +16,39 @@ import subprocess
 import socket
 import time
 
+@st.cache_resource(show_spinner="Starting AI Backend Server (this takes ~15 seconds)...")
 def start_backend():
     """Starts the FastAPI backend automatically if not running (e.g., on Streamlit Cloud)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(1)
+    is_open = False
     try:
-        if s.connect_ex(('127.0.0.1', 8000)) != 0:
-            import sys
-            subprocess.Popen([sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"])
-            time.sleep(3)  # Give it time to start
+        is_open = (s.connect_ex(('127.0.0.1', 8000)) == 0)
     except Exception:
         pass
     finally:
         s.close()
+
+    if not is_open:
+        import sys
+        import subprocess
+        proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"])
+        # Wait up to 60 seconds for heavy transformer models to load
+        start_time = time.time()
+        while time.time() - start_time < 60:
+            s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s2.settimeout(1)
+            try:
+                if s2.connect_ex(('127.0.0.1', 8000)) == 0:
+                    time.sleep(2)  # Give uvicorn a moment to fully bind
+                    return proc
+            except Exception:
+                pass
+            finally:
+                s2.close()
+            time.sleep(2)
+        return proc
+    return True
 
 # Start backend if needed
 start_backend()
