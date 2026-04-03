@@ -123,19 +123,25 @@ class MLService:
         self.labels = {0: "Negative", 1: "Neutral", 2: "Positive"}
         
         if TRANSFORMERS_AVAILABLE:
-            try:
-                print("Loading Transformer Model...")
-                self.transformer_model = TransformerSentimentModel()
-                print("Sentiment Transformer loaded successfully!")
-            except Exception as e:
-                print(f"Failed to load sentiment transformer: {e}")
-            
-            try:
-                print("Loading Emotion Transformer...")
-                self.emotion_model = pipeline("text-classification", model="j-hartmann/emotion-english-distilroberta-base", top_k=1, device=0 if torch.cuda.is_available() else -1)
-                print("Emotion Transformer loaded successfully!")
-            except Exception as e:
-                print(f"Failed to load transformer model: {e}")
+            if os.environ.get("DISABLE_HEAVY_AI") == "1":
+                print("\n========================================================")
+                print("⚠️  HEAVY AI DISABLED TO PREVENT CLOUD OOM CRASHES ⚠️")
+                print("Falling back to extreme lightweight local scikit-learn models.")
+                print("========================================================\n")
+            else:
+                try:
+                    print("Loading Transformer Model...")
+                    self.transformer_model = TransformerSentimentModel()
+                    print("Sentiment Transformer loaded successfully!")
+                except Exception as e:
+                    print(f"Failed to load sentiment transformer: {e}")
+                
+                try:
+                    print("Loading Emotion Transformer...")
+                    self.emotion_model = pipeline("text-classification", model="j-hartmann/emotion-english-distilroberta-base", top_k=1, device=0 if torch.cuda.is_available() else -1)
+                    print("Emotion Transformer loaded successfully!")
+                except Exception as e:
+                    print(f"Failed to load transformer model: {e}")
 
     def _try_load_model(self, path):
         try:

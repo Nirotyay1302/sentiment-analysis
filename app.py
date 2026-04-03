@@ -6,6 +6,11 @@ import os
 import platform
 import re
 from textblob import TextBlob
+
+# Cloud Platform Resource Safety Net
+if platform.system() == "Linux" or os.environ.get("STREAMLIT_SHARING_MODE"):
+    os.environ["DISABLE_HEAVY_AI"] = "1"
+
 import io
 from threading import Thread, Event
 from http.server import HTTPServer, BaseHTTPRequestHandler
