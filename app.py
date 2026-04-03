@@ -429,7 +429,9 @@ st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
-    * { font-family: 'Roboto', sans-serif !important; }
+    html, body, .stApp, .stMarkdown, p, h1, h2, h3, h4, h5, h6, label, input, button { font-family: 'Roboto', sans-serif !important; }
+    /* Protect Material Icons and internal icon classes from being overridden by our font */
+    i, .material-icons, [class*="icon"], [class*="stIcon"] { font-family: 'Material Icons', 'Material Icons Round', inherit !important; }
     body, .stApp { background-color: #f8f9fa !important; color: #334155; }
     .main { 
         background-color: #ffffff !important; 
