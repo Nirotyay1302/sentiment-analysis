@@ -12,6 +12,26 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 from collections import Counter
 import numpy as np
+import subprocess
+import socket
+import time
+
+def start_backend():
+    """Starts the FastAPI backend automatically if not running (e.g., on Streamlit Cloud)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(1)
+    try:
+        if s.connect_ex(('127.0.0.1', 8000)) != 0:
+            import sys
+            subprocess.Popen([sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"])
+            time.sleep(3)  # Give it time to start
+    except Exception:
+        pass
+    finally:
+        s.close()
+
+# Start backend if needed
+start_backend()
 
 # Try to import sklearn metrics for accuracy calculation
 try:
