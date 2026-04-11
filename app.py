@@ -128,7 +128,18 @@ POSITIVE_KEYWORDS = ['positive', 'joy', 'excitement', 'contentment', 'happiness'
                      'thrilled', 'ecstatic', 'elated', 'jubilant', 'cheerful', 'optimistic', 'hopeful', 'proud', 
                      'triumph', 'heartwarming', 'celebrating', 'victory', 'success', 'achievement', 'gratitude',
                      'elation', 'playful', 'serenity', 'bliss', 'euphoria', 'content', 'fulfilled', 'blessed',
-                     'appreciative', 'thankful', 'inspired', 'motivated', 'energetic', 'enthusiastic', 'passionate']
+                     'appreciative', 'thankful', 'inspired', 'motivated', 'energetic', 'enthusiastic', 'passionate',
+                     'awe', 'pride', 'enthusiasm', 'determination', 'surprise', 'inspiration', 'hope', 'empowerment',
+                     'admiration', 'compassion', 'tenderness', 'arousal', 'fulfillment', 'reverence', 'thrill',
+                     'enchantment', 'amusement', 'anticipation', 'kind', 'empathetic', 'free-spirited', 'confident',
+                     'satisfaction', 'accomplishment', 'harmony', 'creativity', 'wonder', 'adventure', 'affection',
+                     'adoration', 'zest', 'whimsy', 'radiance', 'rejuvenation', 'resilience', 'exploration',
+                     'captivation', 'tranquility', 'mischievous', 'motivation', 'appreciation', 'confidence',
+                     'wonderment', 'optimism', 'intrigue', 'mindfulness', 'elegance', 'melodic', 'innerjourney',
+                     'freedom', 'dazzle', 'adrenaline', 'artisticburst', 'spark', 'marvel', 'positivity', 'kindness',
+                     'friendship', 'amazement', 'romance', 'grandeur', 'energy', 'celebration', 'charm', 'ecstasy',
+                     'colorful', 'connection', 'iconic', 'engagement', 'touched', 'solace', 'breakthrough',
+                     'vibrancy', 'relief', 'sympathy']
 
 NEGATIVE_KEYWORDS = ['negative', 'sad', 'angry', 'frustrated', 'disappointed', 'terrible', 'awful', 'bad', 'hate', 
                      'worst', 'horrible', 'disgusting', 'depressed', 'anxious', 'worried', 'fear', 'stress', 
@@ -136,12 +147,19 @@ NEGATIVE_KEYWORDS = ['negative', 'sad', 'angry', 'frustrated', 'disappointed', '
                      'suffering', 'grief', 'sorrow', 'despair', 'hopeless', 'bitterness', 'loneliness', 
                      'embarrassed', 'despair', 'hate', 'bitterness', 'resentment', 'rage', 'fury', 'annoyance',
                      'irritation', 'disgust', 'contempt', 'shame', 'guilt', 'regret', 'remorse', 'melancholy',
-                     'gloom', 'misery', 'anguish', 'torment', 'agony', 'distress', 'trouble', 'hardship']
+                     'gloom', 'misery', 'anguish', 'torment', 'agony', 'distress', 'trouble', 'hardship',
+                     'anger', 'confusion', 'numbness', 'ambivalence', 'betrayal', 'boredom', 'overwhelmed',
+                     'desolation', 'bitter', 'jealousy', 'jealous', 'devastated', 'envious', 'dismissive',
+                     'heartbreak', 'anxiety', 'intimidation', 'helplessness', 'envy', 'yearning', 'apprehensive',
+                     'isolation', 'disappointment', 'emotionalstorm', 'exhaustion', 'darkness', 'desperation',
+                     'ruins', 'heartache', 'solitude', 'miscalculation']
 
 NEUTRAL_KEYWORDS = ['neutral', 'okay', 'fine', 'average', 'normal', 'regular', 'standard', 'typical', 'ordinary', 
                     'moderate', 'balanced', 'calm', 'indifferent', 'unbiased', 'objective', 'factual', 'informative',
                     'curiosity', 'wondering', 'questioning', 'contemplative', 'reflective', 'thoughtful', 'pensive',
-                    'contemplative', 'analytical', 'logical', 'rational', 'practical', 'matter-of-fact']
+                    'contemplative', 'analytical', 'logical', 'rational', 'practical', 'matter-of-fact',
+                    'acceptance', 'indifference', 'reflection', 'contemplation', 'emotion', 'journey', 'immersion',
+                    'nostalgia']
 
 def map_sentiment_label(label):
     """
@@ -177,6 +195,17 @@ def map_sentiment_label(label):
         if iv in [0, 1, 2]:
             return labels[iv]
     except (ValueError, TypeError):
+        pass
+    
+    # TextBlob fallback
+    try:
+        from textblob import TextBlob
+        tb = TextBlob(label_str)
+        if tb.sentiment.polarity > 0.05:
+            return "Positive"
+        elif tb.sentiment.polarity < -0.05:
+            return "Negative"
+    except:
         pass
     
     # Default to neutral if unclear
