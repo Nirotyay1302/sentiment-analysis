@@ -113,14 +113,12 @@ except ImportError:
 OCR_AVAILABLE = False
 EasyOCR = None
 try:
-    import easyocr
+    import pytesseract
     from PIL import Image
     import io
     OCR_AVAILABLE = True
-    ocr_reader = None
 except ImportError:
     OCR_AVAILABLE = False
-    ocr_reader = None
 
 labels = {0: "Negative", 1: "Neutral", 2: "Positive"}
 
@@ -522,10 +520,10 @@ st.sidebar.markdown("---")
 st.sidebar.header("📸 OCR Status")
 if OCR_AVAILABLE:
     st.sidebar.success("✅ OCR Available")
-    st.sidebar.caption("Image text extraction<br>enabled with EasyOCR", unsafe_allow_html=True)
+    st.sidebar.caption("Image text extraction<br>enabled with PyTesseract", unsafe_allow_html=True)
 else:
     st.sidebar.info("ℹ️ OCR Not Available")
-    st.sidebar.caption("Install: pip install easyocr Pillow")
+    st.sidebar.caption("Install: pip install pytesseract Pillow")
 
 st.markdown("<h1 style='text-align: center; color: #0066cc; margin-bottom: 0.5em;'>📊 Social Media Sentiment Analyzer</h1>", unsafe_allow_html=True)
 
@@ -947,24 +945,12 @@ def plot_confusion_matrix(cm, labels=["Negative", "Neutral", "Positive"]):
         return None
 
 def initialize_ocr_reader():
-    """Initialize EasyOCR reader (lazy loading to avoid slow startup)."""
-    global ocr_reader
-    if not OCR_AVAILABLE:
-        return None
-    if ocr_reader is None:
-        try:
-            # Initialize EasyOCR reader for English (GPU disabled for cloud compatibility)
-            # This will download models on first use (~100MB, takes 30-60 seconds)
-            ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-            return ocr_reader
-        except Exception as e:
-            print(f"Failed to initialize OCR reader: {e}")
-            return None
-    return ocr_reader
+    """Initialize OCR reader (compatibility placeholder)."""
+    return OCR_AVAILABLE
 
 def extract_text_from_image(image_file):
     """
-    Extract text from an image using OCR.
+    Extract text from an image using PyTesseract.
     
     Args:
         image_file: Uploaded image file (Streamlit UploadedFile)
@@ -976,30 +962,23 @@ def extract_text_from_image(image_file):
         return []
     
     try:
-        # Initialize OCR reader
-        reader = initialize_ocr_reader()
-        if reader is None:
-            return []
-        
         # Read image
         image = Image.open(image_file)
         
-        # Convert to numpy array for EasyOCR (numpy already imported at top)
-        img_array = np.array(image)
-        
         # Perform OCR
-        results = reader.readtext(img_array)
+        text = pytesseract.image_to_string(image)
         
         # Extract text from results
         extracted_texts = []
-        for (bbox, text, confidence) in results:
-            # Filter out low confidence results
-            if confidence > 0.3:  # Adjust threshold as needed
-                extracted_texts.append(text)
+        if text and text.strip():
+            extracted_texts.append(text.strip())
         
         return extracted_texts
     except Exception as e:
-        st.error(f"Error extracting text from image: {e}")
+        if "tesseract is not installed" in str(e).lower() or "not correctly configured" in str(e).lower():
+            st.error("Tesseract Engine is not installed on the system. OCR cannot proceed.")
+        else:
+            st.error(f"Error extracting text from image: {e}")
         return []
 
 # ----------- Mode 1: Dataset Analyzer -----------
