@@ -1452,8 +1452,9 @@ elif mode == "Analyze Image/Screenshot":
         **OCR (Optical Character Recognition) is not available.**
         
         **To enable OCR**:
-        1. Install required packages: `pip install easyocr Pillow`
-        2. Restart the app
+        1. Install required packages: `pip install pytesseract Pillow`
+        2. Ensure Tesseract Engine is installed on your system (Cloud: packages.txt handles this)
+        3. Restart the app
         
         **Alternative**: Use 'Manual Text Input' mode to copy and paste text from images.
         """)
