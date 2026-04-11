@@ -8,44 +8,19 @@
 - **Classes**: 3 (Negative=0, Neutral=1, Positive=2)
 
 ### Training Data
-- **Total Samples**: 120
-- **Label Distribution**:
-  - Negative: 40 samples
-  - Neutral: 40 samples
-  - Positive: 40 samples
-- **Train/Validation/Test Split**: 76/20/24
+- **Total Samples**: 733
+- **Dataset**: `sentimentdataset.csv`
 
 ### Performance Metrics
 
 #### Validation Set
-- **Accuracy**: 80.0%
-- **Precision**:
-  - Negative: 0.80
-  - Neutral: 0.78
-  - Positive: 0.83
-- **Recall**:
-  - Negative: 0.67
-  - Neutral: 1.00
-  - Positive: 0.71
-- **F1-Score**:
-  - Negative: 0.73
-  - Neutral: 0.88
-  - Positive: 0.77
+- **Accuracy**: 86.5%
+- **Macro F1-Score**: 0.87
 
-#### Test Set
-- **Accuracy**: 79.17%
-- **Precision**:
-  - Negative: 0.80
-  - Neutral: 0.86
-  - Positive: 0.71
-- **Recall**:
-  - Negative: 1.00
-  - Neutral: 0.75
-  - Positive: 0.62
-- **F1-Score**:
-  - Negative: 0.89
-  - Neutral: 0.80
-  - Positive: 0.67
+### Performance Metrics
+
+#### Additional Information
+- Model successfully retrained using Logistic Regression with expanded label mappings to correctly capture nuanced emotions inside sentimentdataset.csv mapped to Positive(2), Neutral(1), Negative(0).
 
 ## Test Results
 

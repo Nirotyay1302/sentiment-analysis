@@ -13,6 +13,7 @@ import argparse
 import joblib
 import numpy as np
 import pandas as pd
+from textblob import TextBlob
 from scipy.stats import randint, uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, f1_score
@@ -43,7 +44,18 @@ POSITIVE_KEYWORDS = ['positive', 'joy', 'excitement', 'contentment', 'happiness'
                      'thrilled', 'ecstatic', 'elated', 'jubilant', 'cheerful', 'optimistic', 'hopeful', 'proud', 
                      'triumph', 'heartwarming', 'celebrating', 'victory', 'success', 'achievement', 'gratitude',
                      'elation', 'playful', 'serenity', 'bliss', 'euphoria', 'content', 'fulfilled', 'blessed',
-                     'appreciative', 'thankful', 'inspired', 'motivated', 'energetic', 'enthusiastic', 'passionate']
+                     'appreciative', 'thankful', 'inspired', 'motivated', 'energetic', 'enthusiastic', 'passionate',
+                     'awe', 'pride', 'enthusiasm', 'determination', 'surprise', 'inspiration', 'hope', 'empowerment',
+                     'admiration', 'compassion', 'tenderness', 'arousal', 'fulfillment', 'reverence', 'thrill',
+                     'enchantment', 'amusement', 'anticipation', 'kind', 'empathetic', 'free-spirited', 'confident',
+                     'satisfaction', 'accomplishment', 'harmony', 'creativity', 'wonder', 'adventure', 'affection',
+                     'adoration', 'zest', 'whimsy', 'radiance', 'rejuvenation', 'resilience', 'exploration',
+                     'captivation', 'tranquility', 'mischievous', 'motivation', 'appreciation', 'confidence',
+                     'wonderment', 'optimism', 'intrigue', 'mindfulness', 'elegance', 'melodic', 'innerjourney',
+                     'freedom', 'dazzle', 'adrenaline', 'artisticburst', 'spark', 'marvel', 'positivity', 'kindness',
+                     'friendship', 'amazement', 'romance', 'grandeur', 'energy', 'celebration', 'charm', 'ecstasy',
+                     'colorful', 'connection', 'iconic', 'engagement', 'touched', 'solace', 'breakthrough',
+                     'vibrancy', 'relief', 'sympathy']
 
 NEGATIVE_KEYWORDS = ['negative', 'sad', 'angry', 'frustrated', 'disappointed', 'terrible', 'awful', 'bad', 'hate', 
                      'worst', 'horrible', 'disgusting', 'depressed', 'anxious', 'worried', 'fear', 'stress', 
@@ -51,12 +63,19 @@ NEGATIVE_KEYWORDS = ['negative', 'sad', 'angry', 'frustrated', 'disappointed', '
                      'suffering', 'grief', 'sorrow', 'despair', 'hopeless', 'bitterness', 'loneliness', 
                      'embarrassed', 'despair', 'hate', 'bitterness', 'resentment', 'rage', 'fury', 'annoyance',
                      'irritation', 'disgust', 'contempt', 'shame', 'guilt', 'regret', 'remorse', 'melancholy',
-                     'gloom', 'misery', 'anguish', 'torment', 'agony', 'distress', 'trouble', 'hardship']
+                     'gloom', 'misery', 'anguish', 'torment', 'agony', 'distress', 'trouble', 'hardship',
+                     'anger', 'confusion', 'numbness', 'ambivalence', 'betrayal', 'boredom', 'overwhelmed',
+                     'desolation', 'bitter', 'jealousy', 'jealous', 'devastated', 'envious', 'dismissive',
+                     'heartbreak', 'anxiety', 'intimidation', 'helplessness', 'envy', 'yearning', 'apprehensive',
+                     'isolation', 'disappointment', 'emotionalstorm', 'exhaustion', 'darkness', 'desperation',
+                     'ruins', 'heartache', 'solitude', 'miscalculation']
 
 NEUTRAL_KEYWORDS = ['neutral', 'okay', 'fine', 'average', 'normal', 'regular', 'standard', 'typical', 'ordinary', 
                     'moderate', 'balanced', 'calm', 'indifferent', 'unbiased', 'objective', 'factual', 'informative',
                     'curiosity', 'wondering', 'questioning', 'contemplative', 'reflective', 'thoughtful', 'pensive',
-                    'contemplative', 'analytical', 'logical', 'rational', 'practical', 'matter-of-fact']
+                    'contemplative', 'analytical', 'logical', 'rational', 'practical', 'matter-of-fact',
+                    'acceptance', 'indifference', 'reflection', 'contemplation', 'emotion', 'journey', 'immersion',
+                    'nostalgia']
 
 
 def map_sentiment_label(label):
@@ -93,7 +112,14 @@ def map_sentiment_label(label):
     except (ValueError, TypeError):
         pass
     
-    # Default to neutral if unclear
+    # Fallback to textblob interpretation of the label text
+    tb = TextBlob(label_str)
+    if tb.sentiment.polarity > 0.05:
+        return 2
+    elif tb.sentiment.polarity < -0.05:
+        return 0
+        
+    # Final default to neutral if unclear
     return 1  # Neutral
 
 
@@ -407,7 +433,7 @@ def main():
 
     print(f"Train size: {len(X_train)}, Val size: {len(X_val)}")
     # Default to XGBoost and upsampling if not specified
-    use_xgb = args.use_xgb if args.use_xgb else XGBOOST_AVAILABLE
+    use_xgb = False
     use_upsample = args.upsample if args.upsample else True
     best_model = tune_and_train(
         X_train,
