@@ -39,8 +39,8 @@ env/
 # Streamlit
 .streamlit/secrets.toml
 
-# Model files (using transformer model instead)
-model.joblib
+# Model files
+# model.joblib (Commented out: we now rely on this for memory efficiency!)
 
 # OS
 .DS_Store
