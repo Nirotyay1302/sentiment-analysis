@@ -212,9 +212,27 @@ def map_sentiment_label(label):
     return "Neutral"
 
 def predict_sentiment(texts):
-    """Predict sentiment via the FastAPI backend API with batching."""
+    """Predict sentiment, preferring direct model load to expose errors to UI."""
     if isinstance(texts, str):
         texts = [texts]
+        
+    try:
+        import joblib
+        import os
+        model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+            # Returns predictions as integers 0, 1, 2
+            preds = model.predict(texts)
+            return preds.tolist()
+        else:
+            st.error(f"Cannot find model at {model_path}")
+    except Exception as e:
+        import traceback
+        st.error(f"Direct Model Load Error: {repr(e)}")
+        st.error(traceback.format_exc())
+        
+    # Standard Backend API Fallback
     
     batch_size = 50
     results = []
@@ -242,9 +260,21 @@ def predict_sentiment(texts):
     return results
 
 def predict_proba_sentiment(texts):
-    """Predict sentiment probabilities via the FastAPI backend with batching."""
+    """Predict sentiment probabilities, preferring direct model load."""
     if isinstance(texts, str):
         texts = [texts]
+        
+    try:
+        import joblib
+        import os
+        model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+            return model.predict_proba(texts).tolist()
+    except Exception as e:
+        pass # Handle silently for proba, error already shown in predict_sentiment
+        
+    # Standard Backend API Fallback
     
     batch_size = 50
     results = []
