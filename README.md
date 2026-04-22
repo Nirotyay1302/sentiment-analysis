@@ -1,6 +1,10 @@
 # 📊 Sentiment Analysis App
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit-red?logo=streamlit)](https://sentiment-analysis-mckv.streamlit.app/)
+<<<<<<< HEAD
+=======
+
+>>>>>>> a37cf06c91543abd792fcf29d4392e259c76aca5
 
 A comprehensive sentiment analysis application with **transformer-based models** (RoBERTa), word clouds, time-series analysis, and RESTful API.
 
