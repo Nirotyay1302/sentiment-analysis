@@ -270,7 +270,7 @@ def predict_proba_sentiment(texts):
         model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
         if os.path.exists(model_path):
             model = joblib.load(model_path)
-            return model.predict_proba(texts).tolist()
+            return model.predict_proba(texts)
     except Exception as e:
         pass # Handle silently for proba, error already shown in predict_sentiment
         
