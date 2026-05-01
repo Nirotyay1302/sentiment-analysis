@@ -215,94 +215,28 @@ def predict_sentiment(texts):
     if isinstance(texts, str):
         texts = [texts]
         
-    # Try Backend API first
-    batch_size = 50
-    results = []
-    api_success = True
-    
     try:
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i+batch_size]
-            response = requests.post("http://127.0.0.1:8000/predict", json={"texts": batch}, timeout=60)
-            if response.status_code == 200:
-                predictions = response.json().get("predictions", [])
-                # Map text labels back to integers for UI compatibility
-                text_to_num = {"Negative": 0, "Neutral": 1, "Positive": 2}
-                results.extend([text_to_num.get(p, 1) for p in predictions])
-            else:
-                api_success = False
-                break
-    except Exception as e:
-        api_success = False
-        
-    if api_success and len(results) == len(texts):
+        from backend.ml_service import ml_service
+        preds = ml_service.analyze_sentiment(texts)
+        # Map text labels back to integers for UI compatibility
+        text_to_num = {"Negative": 0, "Neutral": 1, "Positive": 2}
+        results = [text_to_num.get(p, 1) for p in preds]
         return results
-        
-    # Fallback to direct model load if API fails
-    try:
-        import joblib
-        import os
-        model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
-        if os.path.exists(model_path):
-            model = joblib.load(model_path)
-            # Returns predictions as integers 0, 1, 2
-            preds = model.predict(texts)
-            return preds.tolist()
     except Exception as e:
-        pass
-            
-    # Absolute fallback if both API and model load fail
-    remaining = len(texts) - len(results)
-    if remaining > 0:
-        results.extend([1] * remaining)
-    return results
+        print(f"Direct ml_service prediction failed: {e}")
+        return [1] * len(texts)
 
 def predict_proba_sentiment(texts):
     """Predict sentiment probabilities using backend API, falling back to direct model load."""
     if isinstance(texts, str):
         texts = [texts]
         
-    # Try Backend API first
-    batch_size = 50
-    results = []
-    api_success = True
-    
     try:
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i+batch_size]
-            response = requests.post("http://127.0.0.1:8000/predict", json={"texts": batch}, timeout=60)
-            if response.status_code == 200:
-                probs = response.json().get("probabilities", [])
-                if probs:
-                    results.extend(probs)
-                else:
-                    results.extend([[0.2, 0.6, 0.2]] * len(batch))
-            else:
-                api_success = False
-                break
+        from backend.ml_service import ml_service
+        return np.array(ml_service.analyze_probabilities(texts))
     except Exception as e:
-        api_success = False
-        
-    if api_success and len(results) == len(texts):
-        return np.array(results)
-        
-    # Fallback to direct model load if API fails
-    try:
-        import joblib
-        import os
-        model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
-        if os.path.exists(model_path):
-            model = joblib.load(model_path)
-            return model.predict_proba(texts)
-    except Exception as e:
-        pass 
-    
-    # Fallback to neutral probabilities if API and model fail
-    remaining = len(texts) - len(results)
-    if remaining > 0:
-        results.extend([[0.2, 0.6, 0.2]] * remaining)
-    
-    return np.array(results)
+        print(f"Direct ml_service probability prediction failed: {e}")
+        return np.array([[0.2, 0.6, 0.2]] * len(texts))
 
 def ensure_model_ui():
     """In-UI helper: check if backend API is reachable."""
