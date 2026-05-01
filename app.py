@@ -115,7 +115,6 @@ EasyOCR = None
 try:
     import pytesseract
     from PIL import Image
-    import io
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
@@ -212,30 +211,14 @@ def map_sentiment_label(label):
     return "Neutral"
 
 def predict_sentiment(texts):
-    """Predict sentiment, preferring direct model load to expose errors to UI."""
+    """Predict sentiment using backend API, falling back to direct model load."""
     if isinstance(texts, str):
         texts = [texts]
         
-    try:
-        import joblib
-        import os
-        model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
-        if os.path.exists(model_path):
-            model = joblib.load(model_path)
-            # Returns predictions as integers 0, 1, 2
-            preds = model.predict(texts)
-            return preds.tolist()
-        else:
-            st.error(f"Cannot find model at {model_path}")
-    except Exception as e:
-        import traceback
-        st.error(f"Direct Model Load Error: {repr(e)}")
-        st.error(traceback.format_exc())
-        
-    # Standard Backend API Fallback
-    
+    # Try Backend API first
     batch_size = 50
     results = []
+    api_success = True
     
     try:
         for i in range(0, len(texts), batch_size):
@@ -247,37 +230,42 @@ def predict_sentiment(texts):
                 text_to_num = {"Negative": 0, "Neutral": 1, "Positive": 2}
                 results.extend([text_to_num.get(p, 1) for p in predictions])
             else:
-                results.extend([1] * len(batch))
-        return results
+                api_success = False
+                break
     except Exception as e:
-        if len(results) == 0:
-            st.error(f"Backend API Error: {e}")
-            
-    # Absolute fallback if API fails for remaining
-    remaining = len(texts) - len(results)
-    if remaining > 0:
-        results.extend([1] * remaining)
-    return results
-
-def predict_proba_sentiment(texts):
-    """Predict sentiment probabilities, preferring direct model load."""
-    if isinstance(texts, str):
-        texts = [texts]
+        api_success = False
         
+    if api_success and len(results) == len(texts):
+        return results
+        
+    # Fallback to direct model load if API fails
     try:
         import joblib
         import os
         model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
         if os.path.exists(model_path):
             model = joblib.load(model_path)
-            return model.predict_proba(texts)
+            # Returns predictions as integers 0, 1, 2
+            preds = model.predict(texts)
+            return preds.tolist()
     except Exception as e:
-        pass # Handle silently for proba, error already shown in predict_sentiment
+        pass
+            
+    # Absolute fallback if both API and model load fail
+    remaining = len(texts) - len(results)
+    if remaining > 0:
+        results.extend([1] * remaining)
+    return results
+
+def predict_proba_sentiment(texts):
+    """Predict sentiment probabilities using backend API, falling back to direct model load."""
+    if isinstance(texts, str):
+        texts = [texts]
         
-    # Standard Backend API Fallback
-    
+    # Try Backend API first
     batch_size = 50
     results = []
+    api_success = True
     
     try:
         for i in range(0, len(texts), batch_size):
@@ -290,14 +278,26 @@ def predict_proba_sentiment(texts):
                 else:
                     results.extend([[0.2, 0.6, 0.2]] * len(batch))
             else:
-                results.extend([[0.2, 0.6, 0.2]] * len(batch))
+                api_success = False
+                break
+    except Exception as e:
+        api_success = False
         
-        if results:
-            return np.array(results)
-    except:
-        pass
+    if api_success and len(results) == len(texts):
+        return np.array(results)
+        
+    # Fallback to direct model load if API fails
+    try:
+        import joblib
+        import os
+        model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+            return model.predict_proba(texts)
+    except Exception as e:
+        pass 
     
-    # Fallback to neutral probabilities if API fails for remaining
+    # Fallback to neutral probabilities if API and model fail
     remaining = len(texts) - len(results)
     if remaining > 0:
         results.extend([[0.2, 0.6, 0.2]] * remaining)
@@ -631,70 +631,7 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def is_numeric_column(series, threshold=0.8):
-    """
-    Check if a column is primarily numeric.
-    
-    Args:
-        series: pandas Series to check
-        threshold: Minimum proportion of numeric values to consider column as numeric
-    
-    Returns:
-        True if column is primarily numeric, False otherwise
-    """
-    if len(series) == 0:
-        return False
-    
-    # Convert to string and check
-    series_str = series.astype(str)
-    
-    # Count numeric-like values (pure numbers, or numbers with minimal text)
-    numeric_count = 0
-    total_count = 0
-    
-    for val in series_str:
-        val_str = str(val).strip()
-        if val_str == '' or pd.isna(val):
-            continue
-        
-        total_count += 1
-        # Check if value is primarily numeric
-        # Remove common separators and check if remaining is mostly digits
-        cleaned = re.sub(r'[,\s$€£¥%]', '', val_str)
-        if cleaned == '':
-            continue
-        
-        # Check if it's a pure number or mostly numeric
-        if re.match(r'^[\d.+-]+$', cleaned) or (len(re.findall(r'\d', cleaned)) / max(len(cleaned), 1)) > 0.7:
-            numeric_count += 1
-    
-    if total_count == 0:
-        return False
-    
-    # If more than threshold% are numeric, consider it a numeric column
-    return (numeric_count / total_count) > threshold
 
-def filter_text_columns(df):
-    """
-    Filter out numeric columns and return only text columns suitable for sentiment analysis.
-    
-    Args:
-        df: pandas DataFrame
-    
-    Returns:
-        List of column names that are suitable for text analysis
-    """
-    text_columns = []
-    for col in df.columns:
-        # Skip if column is numeric type
-        if pd.api.types.is_numeric_dtype(df[col]):
-            continue
-        
-        # Check if column contains primarily text (not numeric)
-        if not is_numeric_column(df[col]):
-            text_columns.append(col)
-    
-    return text_columns
 
 def analyze_sentiment_textblob(text):
     blob = TextBlob(text)
@@ -706,15 +643,6 @@ def analyze_sentiment_textblob(text):
     else:
         return "Neutral"
 
-def analyze_sentiment_textblob(text):
-    blob = TextBlob(text)
-    polarity = blob.sentiment.polarity  # type: ignore
-    if polarity > 0.05:
-        return "Positive"
-    elif polarity < -0.05:
-        return "Negative"
-    else:
-        return "Neutral"
 
 
 def render_pie_chart(sentiment_counts, title="Sentiment Distribution", colors=None):
