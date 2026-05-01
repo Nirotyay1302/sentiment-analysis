@@ -1925,6 +1925,11 @@ elif mode == "Train Custom Model":
                         
                         # Filter out invalid labels
                         valid_data = [(t, l) for t, l in zip(texts, labels) if l in ["Negative", "Neutral", "Positive"]]
+                        if len(valid_data) > 25000:
+                            import random
+                            valid_data = random.sample(valid_data, 25000)
+                            st.warning("Dataset is very large. Randomly sampled 25,000 rows for optimal training performance.")
+                            
                         if len(valid_data) < 50:
                             st.error("Dataset has too few valid labels. Ensure labels contain Positive, Negative, or Neutral (or 0,1,2, or 4).")
                         else:
