@@ -146,9 +146,9 @@ def load_data(data_path=None):
         text_col = None
         label_col = None
         for col in df.columns:
-            if 'text' in col.lower() or 'comment' in col.lower() or 'review' in col.lower():
+            if text_col is None and ('text' in col.lower() or 'comment' in col.lower() or 'review' in col.lower()):
                 text_col = col
-            if 'sentiment' in col.lower() or 'label' in col.lower():
+            if label_col is None and ('sentiment' in col.lower() or 'label' in col.lower()):
                 label_col = col
         if text_col is None:
             for col in df.columns:
@@ -433,7 +433,7 @@ def main():
 
     print(f"Train size: {len(X_train)}, Val size: {len(X_val)}")
     # Default to XGBoost and upsampling if not specified
-    use_xgb = False
+    use_xgb = args.use_xgb
     use_upsample = args.upsample if args.upsample else True
     best_model = tune_and_train(
         X_train,
