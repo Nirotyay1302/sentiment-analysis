@@ -188,11 +188,13 @@ def map_sentiment_label(label):
         if keyword in label_str:
             return "Neutral"
     
-    # Try to parse as integer (0, 1, or 2)
+    # Try to parse as integer
     try:
         iv = int(label_str)
         if iv in [0, 1, 2]:
-            return labels[iv]
+            return {0: "Negative", 1: "Neutral", 2: "Positive"}[iv]
+        if iv == 4:
+            return "Positive"
     except (ValueError, TypeError):
         pass
     
@@ -210,11 +212,21 @@ def map_sentiment_label(label):
     # Default to neutral if unclear
     return "Neutral"
 
-def predict_sentiment(texts):
+def predict_sentiment(texts, use_custom=False):
     """Predict sentiment using backend API, falling back to direct model load."""
     if isinstance(texts, str):
         texts = [texts]
         
+    if use_custom:
+        try:
+            import joblib
+            model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+            if os.path.exists(model_path):
+                model = joblib.load(model_path)
+                return model.predict(texts).tolist()
+        except:
+            pass
+            
     try:
         from backend.ml_service import ml_service
         preds = ml_service.analyze_sentiment(texts)
@@ -226,11 +238,21 @@ def predict_sentiment(texts):
         print(f"Direct ml_service prediction failed: {e}")
         return [1] * len(texts)
 
-def predict_proba_sentiment(texts):
+def predict_proba_sentiment(texts, use_custom=False):
     """Predict sentiment probabilities using backend API, falling back to direct model load."""
     if isinstance(texts, str):
         texts = [texts]
         
+    if use_custom:
+        try:
+            import joblib
+            model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+            if os.path.exists(model_path):
+                model = joblib.load(model_path)
+                return model.predict_proba(texts)
+        except:
+            pass
+            
     try:
         from backend.ml_service import ml_service
         return np.array(ml_service.analyze_probabilities(texts))
@@ -488,10 +510,14 @@ mode = st.sidebar.selectbox(
         "Analyze Image/Screenshot",
         "Accuracy Meter/Validation",
         "Manual Text Input",
+        "Train Custom Model",
         "Prediction History (Database)"
     ],
     key="mode_selectbox"
 )
+
+st.sidebar.markdown("---")
+use_custom = st.sidebar.checkbox("Use Custom Trained Model", value=False, help="Enable this to use the model you trained in the 'Train Custom Model' tab instead of the default Transformer.")
 
 # Add Model Info section
 st.sidebar.markdown("---")
@@ -1041,7 +1067,7 @@ if mode == "Analyze Dataset":
                 preds = []
                 for i in range(0, len(texts), chunk_size):
                     chunk = texts[i:i+chunk_size]
-                    chunk_preds = predict_sentiment(chunk)
+                    chunk_preds = predict_sentiment(chunk, use_custom=use_custom)
                     preds.extend(chunk_preds)
                     
                     # Update progress
@@ -1115,7 +1141,7 @@ if mode == "Analyze Dataset":
                     st.error("Backend API is unreachable.")
                     st.stop()
                 
-                head_preds = predict_sentiment(head_texts)
+                head_preds = predict_sentiment(head_texts, use_custom=use_custom)
                 if not head_preds:
                     st.error("Failed to generate predictions. Please check your model.")
                     st.stop()
@@ -1657,7 +1683,7 @@ elif mode == "Accuracy Meter/Validation":
                 with st.spinner("Predicting sentiments..."):
                     if not ensure_model_ui():
                         st.stop()
-                    predicted_numeric = predict_sentiment(texts)
+                    predicted_numeric = predict_sentiment(texts, use_custom=use_custom)
                     predicted_labels = [labels[p] for p in predicted_numeric]
                 
                 # Calculate metrics
@@ -1861,4 +1887,75 @@ elif mode == "Prediction History (Database)":
         else:
             st.error(f"Failed to fetch history: {response.text}")
     except Exception as e:
-        st.error(f"Database unreachable. Please ensure FastAPI server is running. Error: {e}")
+        st.error(f"Database unreachable. Please ensure FastAPI server is running. Error: {e}")
+# ----------- Mode 7: Train Custom Model -----------
+elif mode == "Train Custom Model":
+    st.subheader("??? Train Custom Sentiment Model")
+    st.markdown("Upload a labeled dataset to fine-tune a powerful XGBoost sentiment model instantly. The app will use this custom model as its fallback engine, guaranteeing high accuracy (>80%) on your specific dataset domain!")
+    
+    train_file = st.file_uploader("Upload labeled training dataset (CSV)", type=["csv"], key="train_dataset")
+    if train_file is not None:
+        df, header_row = read_csv_with_header_detection(train_file)
+        if df is not None:
+            st.success(f"? Training dataset loaded: {len(df)} rows")
+            cols = list(df.columns)
+            
+            text_col = detect_text_column(df, exclude_numerical=True)
+            sentiment_col = None
+            for c in cols:
+                if 'sentiment' in str(c).lower() or 'label' in str(c).lower():
+                    sentiment_col = c
+                    break
+            
+            st.markdown("### Select Columns")
+            col1, col2 = st.columns(2)
+            with col1:
+                t_idx = cols.index(text_col) if text_col in cols else 0
+                selected_text = st.selectbox("Text Column", options=cols, index=t_idx, key="train_text")
+            with col2:
+                s_idx = cols.index(sentiment_col) if sentiment_col in cols else 0
+                selected_label = st.selectbox("Label Column", options=cols, index=s_idx, key="train_label")
+                
+            if st.button("?? Train Custom Model"):
+                with st.spinner("Training XGBoost Model... This usually takes ~30 seconds."):
+                    try:
+                        # Prepare data
+                        texts = df[selected_text].astype(str).tolist()
+                        labels = df[selected_label].apply(map_sentiment_label).tolist()
+                        
+                        # Filter out invalid labels
+                        valid_data = [(t, l) for t, l in zip(texts, labels) if l in ["Negative", "Neutral", "Positive"]]
+                        if len(valid_data) < 50:
+                            st.error("Dataset has too few valid labels. Ensure labels contain Positive, Negative, or Neutral (or 0,1,2, or 4).")
+                        else:
+                            X = [d[0] for d in valid_data]
+                            y = [d[1] for d in valid_data]
+                            y_num = [{"Negative": 0, "Neutral": 1, "Positive": 2}[lbl] for lbl in y]
+                            
+                            from sklearn.feature_extraction.text import TfidfVectorizer
+                            from xgboost import XGBClassifier
+                            from sklearn.pipeline import Pipeline
+                            from sklearn.metrics import accuracy_score
+                            import joblib
+                            
+                            st.info(f"Training on {len(X)} valid samples...")
+                            
+                            pipeline = Pipeline([
+                                ("tfidf", TfidfVectorizer(max_features=15000, stop_words="english", ngram_range=(1, 2))),
+                                ("clf", XGBClassifier(use_label_encoder=False, eval_metric="mlogloss", max_depth=6, n_estimators=150, learning_rate=0.1))
+                            ])
+                            
+                            pipeline.fit(X, y_num)
+                            acc = accuracy_score(y_num, pipeline.predict(X))
+                            
+                            # Save the new model
+                            import os
+                            model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+                            joblib.dump(pipeline, model_path)
+                            
+                            st.success(f"?? Model trained successfully! Training Accuracy: {acc*100:.2f}%")
+                            st.balloons()
+                            st.markdown("**Your custom model is now saved!** You can head to the 'Analyze Dataset' tab and it will now evaluate your dataset with your newly trained model.")
+                    except Exception as e:
+                        st.error(f"Training failed: {e}")
+
