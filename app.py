@@ -422,39 +422,50 @@ def detect_text_column(df, exclude_numerical=True):
     return detected_col
 
 def read_csv_with_header_detection(uploaded):
-    """Read a CSV and try to detect if the real header is on a later row (common with exported CSVs that include a title row).
-
-    Returns (df, header_row_index_or_None)
-    """
+    """Read a CSV or Excel file and try to detect if the real header is on a later row."""
     try:
-        # Create a text buffer for preview
-        if hasattr(uploaded, 'read'):
-            uploaded.seek(0)
-            sample_text = uploaded.read().decode('utf-8', errors='ignore')
-            preview_buf = io.StringIO(sample_text)
+        is_excel = uploaded.name.lower().endswith(('.xlsx', '.xls'))
+        
+        # Read preview
+        if is_excel:
+            if hasattr(uploaded, 'seek'): uploaded.seek(0)
+            preview = pd.read_excel(uploaded, header=None, nrows=10, dtype=str)
+            if hasattr(uploaded, 'seek'): uploaded.seek(0)
         else:
-            preview_buf = uploaded
+            if hasattr(uploaded, 'read'):
+                uploaded.seek(0)
+                sample_text = uploaded.read().decode('utf-8', errors='ignore')
+                import io
+                preview_buf = io.StringIO(sample_text)
+            else:
+                preview_buf = uploaded
+            preview = pd.read_csv(preview_buf, header=None, nrows=10, dtype=str, keep_default_na=False)
 
-        preview = pd.read_csv(preview_buf, header=None, nrows=10, dtype=str, keep_default_na=False)
         header_row = None
         for i, row in preview.iterrows():
             row_vals = ' '.join([str(x).lower() for x in row.tolist()])
-            if re.search(r'\btext\b', row_vals):
+            if re.search(r'text', row_vals):
                 header_row = i
                 break
 
-        # Fallback: if first row contains title-like text, assume header is second row
         if header_row is None:
             first0 = str(preview.iloc[0, 0]).lower()
             if 'social media' in first0 or 'sentiments' in first0 or 'social' in first0:
                 header_row = 1
 
-        # Helper to read full CSV safely with multiple encodings
-        def safe_read_full_csv(file_obj, header_idx):
-            kwargs = {'header': header_idx, 'dtype': str, 'keep_default_na': False}
+        # Helper to read full file safely
+        def safe_read_full_file(file_obj, header_idx):
+            kwargs = {'header': header_idx, 'dtype': str}
+            if not is_excel:
+                kwargs['keep_default_na'] = False
+                
             if hasattr(file_obj, 'size') and file_obj.size > 50 * 1024 * 1024:
                 kwargs['nrows'] = 50000
                 st.warning("File is extremely large (>50MB). Only loading the first 50,000 rows to prevent Streamlit memory crashes.")
+                
+            if is_excel:
+                if hasattr(file_obj, 'seek'): file_obj.seek(0)
+                return pd.read_excel(file_obj, **kwargs)
                 
             encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
             for enc in encodings:
@@ -466,11 +477,15 @@ def read_csv_with_header_detection(uploaded):
             if hasattr(file_obj, 'seek'): file_obj.seek(0)
             return pd.read_csv(file_obj, encoding='utf-8', encoding_errors='replace', **kwargs)
 
-        df = safe_read_full_csv(uploaded, header_row if header_row is not None else 0)
+        df = safe_read_full_file(uploaded, header_row if header_row is not None else 0)
+
+        # Excel can return NaNs for empty strings, so fill them for text processing
+        if is_excel:
+            df = df.fillna('')
 
         return df, header_row
     except Exception as e:
-        st.error(f"Error reading CSV: {e}")
+        st.error(f"Error reading file: {e}")
         return None, None
 
 st.set_page_config(page_title="Social Media Sentiment Analyzer", layout="centered", initial_sidebar_state="expanded")
@@ -940,7 +955,7 @@ if mode == "Analyze Dataset":
     st.subheader("📊 Dataset Sentiment Analysis & Auto-Trainer")
     st.markdown("Upload a CSV file. If it contains **labels**, we will automatically train a high-accuracy custom model on it and display the accuracy meter. If it has **no labels**, we will analyze the text and give you the predictions.")
     
-    uploaded_file = st.file_uploader("Upload your dataset (CSV)", type=["csv"], key="dataset_uploader")
+    uploaded_file = st.file_uploader("Upload your dataset (CSV/Excel)", type=["csv", "xlsx", "xls"], key="dataset_uploader")
     if uploaded_file is not None:
         df, header_row = read_csv_with_header_detection(uploaded_file)
         
