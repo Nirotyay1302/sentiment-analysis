@@ -515,7 +515,6 @@ mode = st.sidebar.selectbox(
         "Analyze Dataset",
         "Analyze Image/Screenshot",
         "Manual Text Input",
-        "Train Custom Model",
         "Prediction History (Database)"
     ],
     key="mode_selectbox"
@@ -523,18 +522,6 @@ mode = st.sidebar.selectbox(
 
 st.sidebar.markdown("---")
 
-# Add Model Info section
-st.sidebar.markdown("---")
-st.sidebar.header("🧠 Active Model")
-import os
-if os.path.exists(os.path.join(os.path.dirname(__file__), "model.joblib")):
-    st.sidebar.success("✅ Custom Trained Model")
-    st.sidebar.caption("Using your locally trained model.")
-else:
-    st.sidebar.info("🤖 RoBERTa Default Model")
-    st.sidebar.caption("Using CardiffNLP RoBERTa (High Accuracy).")
-
-# Add Model Info section
 st.sidebar.markdown("---")
 st.sidebar.header("📊 Backend Server Status")
 try:
@@ -945,321 +932,155 @@ def extract_text_from_image(image_file):
 
 # ----------- Mode 1: Dataset Analyzer -----------
 if mode == "Analyze Dataset":
-    st.subheader("📂 Batch Dataset Sentiment Analysis")
-    st.markdown("""
-    Upload a CSV file containing a column with text data. The app will perform a quick scan of up to 100 rows by default (fast), and you can opt to analyze the full dataset.
-    """)
-    # Ensure model is available before analysis
-    if not ensure_model_ui():
-        st.stop()
-
-    uploaded_file = st.file_uploader("Upload a dataset (CSV)", type=["csv"], key="dataset_uploader")
+    st.subheader("📊 Dataset Sentiment Analysis & Auto-Trainer")
+    st.markdown("Upload a CSV file. If it contains **labels**, we will automatically train a high-accuracy custom model on it and display the accuracy meter. If it has **no labels**, we will analyze the text and give you the predictions.")
+    
+    uploaded_file = st.file_uploader("Upload your dataset (CSV)", type=["csv"], key="dataset_uploader")
     if uploaded_file is not None:
         df, header_row = read_csv_with_header_detection(uploaded_file)
+        
         if df is None:
-            st.error("Could not parse uploaded CSV.")
+            st.error("Could not parse uploaded CSV. Please check the file format.")
         else:
-            if header_row is not None:
-                st.info(f"Detected header row at line {header_row + 1} (0-indexed: {header_row}). If this is wrong, override below.")  # type: ignore
-            # Allow user to override the header row if detection fails
-            override_header = st.checkbox("Override detected header row / specify header row manually", value=False, key="override_header_checkbox")
-            if override_header:
-                hdr = st.number_input("Header row index (0-based)", min_value=0, max_value=1000, value=header_row if header_row is not None else 0, step=1, key="header_row_input")  # type: ignore
-                try:
-                    # Re-read uploaded file with user-specified header
-                    uploaded_file.seek(0)
-                    df = pd.read_csv(uploaded_file, header=int(hdr), dtype=str, keep_default_na=False)
-                    st.success(f"Re-read CSV with header row = {hdr}")
-                except Exception as e:
-                    st.error(f"Failed to re-read CSV with header={hdr}: {e}")
-
-        if df is not None:
-            # Let the user pick which column contains the text to analyze
-            # Use improved detection that excludes numerical columns
+            st.success(f"✅ Dataset loaded successfully: {len(df)} rows")
+            
+            # Detect text and label columns
             cols = list(df.columns)
-            detected_col = detect_text_column(df, exclude_numerical=True)
+            text_col = detect_text_column(df, exclude_numerical=True)
             
-            # Filter out numerical columns from selection
-            non_numerical_cols = [c for c in cols if not is_numerical_column(df[c])]
+            sentiment_col = None
+            for c in cols:
+                if 'sentiment' in str(c).lower() or 'label' in str(c).lower():
+                    sentiment_col = c
+                    break
             
-            if not non_numerical_cols:
-                st.error("⚠️ No suitable text columns found. All columns appear to be numerical. Please ensure your dataset contains text data.")
-                st.stop()
-            
-            # Warn about numerical columns
-            numerical_cols = [c for c in cols if is_numerical_column(df[c])]
-            if numerical_cols:
-                st.info(f"ℹ️ Excluded {len(numerical_cols)} numerical column(s) from text analysis: {', '.join(numerical_cols[:5])}")
-            
-            # Select text column (default to detected, or first non-numerical)
-            if detected_col and detected_col in non_numerical_cols:
-                default_idx = non_numerical_cols.index(detected_col)
+            st.markdown("### Step 2: Select Columns")
+            col1, col2 = st.columns(2)
+            with col1:
+                t_idx = cols.index(text_col) if text_col in cols else 0
+                selected_text = st.selectbox("Text Column", options=cols, index=t_idx, key="data_text")
+            with col2:
+                # Add "None (Predict Only)" option for labels
+                label_options = ["None (Predict Only)"] + cols
+                s_idx = label_options.index(sentiment_col) if sentiment_col in label_options else 0
+                selected_label = st.selectbox("Label Column (Select 'None' to just predict)", options=label_options, index=s_idx, key="data_label")
+                
+            st.markdown("### Preview")
+            if selected_label != "None (Predict Only)":
+                st.dataframe(df[[selected_text, selected_label]].head(5))
             else:
-                default_idx = 0
-            
-            text_col = st.selectbox(
-                "Select text column for sentiment analysis (numerical columns excluded)",
-                options=non_numerical_cols,
-                index=default_idx,
-                key="dataset_text_col"
-            )
-            
-            # Validate selected column
-            sample_vals = df[text_col].astype(str).head(20).tolist()
-            num_numeric = sum(1 for v in sample_vals if re.fullmatch(r"^-?\d+\.?\d*$", str(v).strip()))
-            if num_numeric > 5:
-                st.warning(f"⚠️ The selected column '{text_col}' appears to contain many numerical values. Please verify this is the correct text column.")
-            total_rows = len(df)
-            st.write(f"Rows in dataset: **{total_rows}** — using column: **{text_col}**")
-
-            # Quick scan sample size (user-configurable)
-            default_sample = min(100, total_rows)
-            max_sample = min(10000, total_rows)
-            sample_size = st.number_input(
-                "Quick scan sample size (rows)",
-                min_value=1,
-                max_value=max_sample,
-                value=default_sample,
-                step=1,
-                key="sample_size_input",
-            )
-            st.info(f"Quick scan will analyze {sample_size} row(s). Toggle below to analyze the full dataset.")
-
-            analyze_full = st.checkbox("Analyze full dataset (may take longer)", value=False, key="analyze_full_checkbox")
-
-            if analyze_full:
-                # Get original texts before cleaning for validation
-                original_texts = df[text_col].astype(str).tolist()
-                texts = []
-                valid_indices = []
-                filtered_count = 0
+                st.dataframe(df[[selected_text]].head(5))
                 
-                for i, original_text in enumerate(original_texts):
-                    # Check original text first before cleaning
-                    if original_text is None or pd.isna(original_text):
-                        filtered_count += 1
-                        continue
-                    
-                    original_str = str(original_text).strip()
-                    if not original_str or original_str.lower() in ['nan', 'none', 'null', '']:
-                        filtered_count += 1
-                        continue
-                    
-                    # Only filter if it's clearly numeric-only (very strict check)
-                    if is_numeric_only(original_str):
-                        filtered_count += 1
-                        continue
-                    
-                    # Clean the text for processing
-                    cleaned = clean_text(original_str)
-                    if cleaned:  # Only add if cleaning produced valid text
-                        texts.append(cleaned)
-                        valid_indices.append(i)
-                    elif len(original_str) > 3:  # If original has content, use it even if cleaning removed some
-                        texts.append(original_str)
-                        valid_indices.append(i)
-                    else:
-                        filtered_count += 1
+            if st.button("Process Dataset", key="process_dataset_btn"):
+                texts = df[selected_text].astype(str).tolist()
                 
-                if filtered_count > 0:
-                    st.info(f"ℹ️ Filtered out {filtered_count} numeric-only or empty entries (not suitable for sentiment analysis)")
-                
-                df_filtered = df.iloc[valid_indices].copy() if valid_indices else df.copy()
-                
-                # Ensure model UI is set up (will try to load transformer)
-                ensure_model_ui()
-                
-                if len(texts) == 0:
-                    st.warning("⚠️ No valid text entries found after filtering. Please check your dataset.")
-                    st.stop()
-                
-                # Add progress bar
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                # Process in chunks with progress updates
-                chunk_size = max(1, len(texts) // 50)  # Update 50 times
-                preds = []
-                for i in range(0, len(texts), chunk_size):
-                    chunk = texts[i:i+chunk_size]
-                    chunk_preds = predict_sentiment(chunk, use_custom=use_custom)
-                    preds.extend(chunk_preds)
-                    
-                    # Update progress
-                    progress = min(1.0, (i + len(chunk)) / len(texts))
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processed {len(preds)}/{len(texts)} texts...")
-                
-                progress_bar.empty()
-                status_text.empty()
-                
-                # Ensure predictions were generated
-                if not preds:
-                    st.error("Failed to generate predictions. Please check your model.")
-                    st.stop()
-                
-                df_filtered["Predicted"] = preds
-                df_filtered["Predicted_Label"] = df_filtered["Predicted"].map(labels)  # type: ignore
-                result_df = df_filtered
-                st.success(f"Full dataset analysis complete - {len(texts)} valid entries analyzed")
-            else:
-                # Ensure model UI is set up (will try to load transformer)
-                ensure_model_ui()
-                
-                # Use first N rows (deterministic) instead of random sampling
-                head_df = df.head(int(sample_size)).copy()
-                original_head_texts = head_df[text_col].astype(str).tolist()
-                
-                # Filter out numeric-only and empty texts (less aggressive)
-                head_texts = []
-                valid_indices = []
-                filtered_count = 0
-                
-                for i, original_text in enumerate(original_head_texts):
-                    # Check original text first before cleaning
-                    if original_text is None or pd.isna(original_text):
-                        filtered_count += 1
-                        continue
-                    
-                    original_str = str(original_text).strip()
-                    if not original_str or original_str.lower() in ['nan', 'none', 'null', '']:
-                        filtered_count += 1
-                        continue
-                    
-                    # Only filter if it's clearly numeric-only (very strict check)
-                    if is_numeric_only(original_str):
-                        filtered_count += 1
-                        continue
-                    
-                    # Clean the text for processing
-                    cleaned = clean_text(original_str)
-                    if cleaned:  # Only add if cleaning produced valid text
-                        head_texts.append(cleaned)
-                        valid_indices.append(i)
-                    elif len(original_str) > 3:  # If original has content, use it even if cleaning removed some
-                        head_texts.append(original_str)
-                        valid_indices.append(i)
-                    else:
-                        filtered_count += 1
-                
-                if filtered_count > 0:
-                    st.info(f"ℹ️ Filtered out {filtered_count} numeric-only or empty entries (not suitable for sentiment analysis)")
-                
-                head_df_filtered = head_df.iloc[valid_indices].copy() if valid_indices else head_df.copy()
-                
-                if len(head_texts) == 0:
-                    st.warning("⚠️ No valid text entries found after filtering. Please check your dataset.")
-                    st.stop()
-                
-                # Ensure model is ready (delegated to backend)
-                if not ensure_model_ui():
-                    st.error("Backend API is unreachable.")
-                    st.stop()
-                
-                head_preds = predict_sentiment(head_texts, use_custom=use_custom)
-                if not head_preds:
-                    st.error("Failed to generate predictions. Please check your model.")
-                    st.stop()
-                
-                head_df_filtered["Predicted"] = head_preds
-                head_df_filtered["Predicted_Label"] = head_df_filtered["Predicted"].map(labels)  # type: ignore
-                result_df = head_df_filtered
-                st.success(f"Quick scan (first {sample_size} rows) complete - {len(head_texts)} valid entries analyzed")
-
-            # Only show results if analysis was performed
-            if 'result_df' in locals() and result_df is not None and not result_df.empty:
-                # Allow filtering by sentiment (based on text predictions)
-                sentiment_choices = ["Positive", "Neutral", "Negative"]
-                selected_sentiments = st.multiselect("Filter results by sentiment (text) — leave empty to show all", options=sentiment_choices, default=sentiment_choices, key="dataset_sentiment_filter")
-
-                # Show sample of results
-                st.markdown("**Sample results:**")
-                filtered_df = result_df[result_df["Predicted_Label"].isin(selected_sentiments)] if selected_sentiments else result_df
-                st.dataframe(filtered_df.head(20))
-
-                # Sentiment distribution (pie + bar)
-                # Normalize label order to Positive, Neutral, Negative for consistent colors
-                ordered_labels = ["Positive", "Neutral", "Negative"]
-                sentiment_counts = filtered_df["Predicted_Label"].value_counts().reindex(ordered_labels, fill_value=0) if not filtered_df.empty else pd.Series([0,0,0], index=ordered_labels)  # type: ignore
-                if sentiment_counts.sum() > 0:
-                    render_pie_chart(sentiment_counts, colors=["#2ecc71", "#f1c40f", "#e74c3c"])
+                if selected_label != "None (Predict Only)":
+                    # --- AUTO-TRAIN AND ACCURACY METER MODE ---
+                    st.info("Label column detected! Automatically training custom model for high accuracy...")
+                    with st.spinner("Training XGBoost Model on dataset..."):
+                        try:
+                            labels = df[selected_label].apply(map_sentiment_label).tolist()
+                            valid_data = [(t, l) for t, l in zip(texts, labels) if l in ["Negative", "Neutral", "Positive"]]
+                            
+                            if len(valid_data) > 25000:
+                                import random
+                                valid_data = random.sample(valid_data, 25000)
+                                st.warning("Dataset is very large. Randomly sampled 25,000 rows for optimal training.")
+                                
+                            if len(valid_data) < 10:
+                                st.error("Dataset has too few valid labels. Cannot train.")
+                            else:
+                                X = [d[0] for d in valid_data]
+                                y = [d[1] for d in valid_data]
+                                y_num = [{"Negative": 0, "Neutral": 1, "Positive": 2}[lbl] for lbl in y]
+                                
+                                from sklearn.feature_extraction.text import TfidfVectorizer
+                                from xgboost import XGBClassifier
+                                from sklearn.pipeline import Pipeline
+                                from sklearn.metrics import accuracy_score, classification_report
+                                import joblib
+                                import os
+                                
+                                pipeline = Pipeline([
+                                    ("tfidf", TfidfVectorizer(max_features=15000, stop_words="english", ngram_range=(1, 2))),
+                                    ("clf", XGBClassifier(use_label_encoder=False, eval_metric="mlogloss", max_depth=6, n_estimators=150, learning_rate=0.1))
+                                ])
+                                
+                                pipeline.fit(X, y_num)
+                                y_pred_num = pipeline.predict(X)
+                                acc = accuracy_score(y_num, y_pred_num)
+                                
+                                # Save the model
+                                model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+                                joblib.dump(pipeline, model_path)
+                                
+                                st.success(f"✅ Model trained and saved successfully!")
+                                st.balloons()
+                                
+                                # Accuracy Meter Display
+                                st.markdown("---")
+                                st.markdown("## 📊 Accuracy Meter Results")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.metric("Model Accuracy", f"{acc*100:.2f}%")
+                                with col2:
+                                    st.metric("Total Valid Samples", len(valid_data))
+                                    
+                                if acc >= 0.8:
+                                    st.success("✅ High Accuracy Achieved!")
+                                else:
+                                    st.warning("⚠️ Accuracy is below 80%. Consider a larger or cleaner dataset.")
+                                    
+                                # Detailed results for download
+                                pred_labels_text = [{0: "Negative", 1: "Neutral", 2: "Positive"}[p] for p in y_pred_num]
+                                results_df = pd.DataFrame({
+                                    "Text": X,
+                                    "Actual_Sentiment": y,
+                                    "Predicted_Sentiment": pred_labels_text
+                                })
+                                st.dataframe(results_df.head(20))
+                                
+                                csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+                                st.download_button("Download Accuracy Results (CSV)", data=csv_bytes, file_name="accuracy_results.csv", mime="text/csv")
+                        except Exception as e:
+                            st.error(f"Training and evaluation failed: {e}")
                 else:
-                    st.info("No rows match the selected sentiment filters.")
-
-                # Bar chart for counts
-                st.markdown("**Counts (bar):**")
-                st.bar_chart(sentiment_counts)
-
-                # Advanced Visualizations
-                st.markdown("---")
-                st.markdown("## 📊 Advanced Analytics")
-                
-                # Word Clouds by sentiment
-                if WORDCLOUD_AVAILABLE and not filtered_df.empty:
-                    st.markdown("### 💭 Word Clouds by Sentiment")
-                    try:
-                        pos_texts = filtered_df[filtered_df["Predicted_Label"] == "Positive"][text_col].tolist() if len(filtered_df[filtered_df["Predicted_Label"] == "Positive"]) > 0 else []
-                        neg_texts = filtered_df[filtered_df["Predicted_Label"] == "Negative"][text_col].tolist() if len(filtered_df[filtered_df["Predicted_Label"] == "Negative"]) > 0 else []
+                    # --- PREDICTION ONLY MODE ---
+                    with st.spinner("Analyzing sentiments..."):
+                        if not ensure_model_ui():
+                            st.stop()
+                            
+                        chunk_size = max(1, len(texts) // 10)
+                        preds = []
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
                         
-                        if pos_texts:
-                            st.markdown("**Positive Sentiment Words:**")
-                            generate_wordcloud(pos_texts, "Positive Sentiment Word Cloud")
+                        for i in range(0, len(texts), chunk_size):
+                            chunk = texts[i:i+chunk_size]
+                            chunk_preds = predict_sentiment(chunk)
+                            preds.extend(chunk_preds)
+                            progress = min(1.0, (i + len(chunk)) / len(texts))
+                            progress_bar.progress(progress)
+                            status_text.text(f"Analyzed {len(preds)}/{len(texts)} texts...")
+                            
+                        progress_bar.empty()
+                        status_text.empty()
                         
-                        if neg_texts:
-                            st.markdown("**Negative Sentiment Words:**")
-                            generate_wordcloud(neg_texts, "Negative Sentiment Word Cloud")
-                    except Exception as e:
-                        st.info("Could not generate word clouds. Need more data.")
-                
-                # Top Keywords
-                st.markdown("### 🔑 Top Keywords by Sentiment")
-                try:
-                    for sent_label in ["Positive", "Negative"]:
-                        sent_texts = filtered_df[filtered_df["Predicted_Label"] == sent_label][text_col].tolist()
-                        if sent_texts:
-                            keywords = get_top_keywords(sent_texts, sent_label, n=10)
-                            if keywords:
-                                st.write(f"**{sent_label}:**")
-                                keyword_str = ", ".join([f"{word} ({count})" for word, count in keywords])
-                                st.write(keyword_str)
-                except Exception:
-                    pass
-                
-                # Time-series analysis if date column exists
-                st.markdown("### 📈 Sentiment Over Time")
-                date_columns = [col for col in filtered_df.columns if any(x in col.lower() for x in ['date', 'time', 'timestamp'])]
-                if date_columns:
-                    st.info(f"Found potential date columns: {', '.join(date_columns)}")
-                    date_col_selected = st.selectbox("Select date column for time-series analysis:", options=date_columns + ['None'], key="date_col_select")
-                    if date_col_selected and date_col_selected != 'None':
-                        if plot_timeseries(filtered_df, date_col_selected, "Predicted_Label"):
-                            st.success("Time-series chart generated!")
-                else:
-                    st.info("No date/timestamp columns found. Time-series analysis not available.")
-                
-                st.markdown("---")
-                
-                # Show top positive / negative examples (if available)
-                st.markdown("## 📝 Top Examples")
-                try:
-                    pos_examples = result_df[result_df["Predicted_Label"] == "Positive"][text_col].head(5)  # type: ignore
-                    neg_examples = result_df[result_df["Predicted_Label"] == "Negative"][text_col].head(5)  # type: ignore
-                    st.write("**Top Positive examples:**")
-                    for i, v in enumerate(pos_examples, 1):
-                        st.write(f"{i}. {v}")
-                    st.write("**Top Negative examples:**")
-                    for i, v in enumerate(neg_examples, 1):
-                        st.write(f"{i}. {v}")
-                except Exception:
-                    pass
-
-                # Download results (filtered view)
-                try:
-                    download_df = filtered_df if not filtered_df.empty else result_df
-                    csv_bytes = download_df.to_csv(index=False).encode("utf-8")
-                    st.download_button("Download results as CSV", data=csv_bytes, file_name="sentiment_results.csv", mime="text/csv", key="download_results")
-                except Exception as e:
-                    st.error(f"Could not prepare download: {e}")
+                        df["Predicted Sentiment"] = [labels.get(p, "Neutral") for p in preds]
+                        
+                        st.markdown("### Analysis Results")
+                        st.dataframe(df.head(20))
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            counts = df["Predicted Sentiment"].value_counts()
+                            render_pie_chart(counts, title="Sentiment Distribution")
+                        with col2:
+                            st.markdown("**Keyword Cloud**")
+                            generate_wordcloud(texts, "Common Words in Dataset")
+                            
+                        csv_bytes = df.to_csv(index=False).encode("utf-8")
+                        st.download_button("Download Predictions (CSV)", data=csv_bytes, file_name="predictions.csv", mime="text/csv")
 
 elif mode == "Analyze Image/Screenshot":
     st.subheader("📸 Image & Screenshot Sentiment Analysis")
@@ -1512,88 +1333,4 @@ elif mode == "Prediction History (Database)":
     except Exception as e:
         st.error(f"Database unreachable. Please ensure FastAPI server is running. Error: {e}")
 # ----------- Mode 7: Train Custom Model -----------
-elif mode == "Train Custom Model":
-    st.subheader("??? Train Custom Sentiment Model")
-    st.markdown("Upload a labeled dataset to fine-tune a powerful XGBoost sentiment model instantly. The app will use this custom model as its fallback engine, guaranteeing high accuracy (>80%) on your specific dataset domain!")
-    
-    train_file = st.file_uploader("Upload labeled training dataset (CSV)", type=["csv"], key="train_dataset")
-    if train_file is not None:
-        df, header_row = read_csv_with_header_detection(train_file)
-        if df is not None:
-            st.success(f"? Training dataset loaded: {len(df)} rows")
-            cols = list(df.columns)
-            
-            text_col = detect_text_column(df, exclude_numerical=True)
-            sentiment_col = None
-            for c in cols:
-                if 'sentiment' in str(c).lower() or 'label' in str(c).lower():
-                    sentiment_col = c
-                    break
-            
-            st.markdown("### Select Columns")
-            col1, col2 = st.columns(2)
-            with col1:
-                t_idx = cols.index(text_col) if text_col in cols else 0
-                selected_text = st.selectbox("Text Column", options=cols, index=t_idx, key="train_text")
-            with col2:
-                s_idx = cols.index(sentiment_col) if sentiment_col in cols else 0
-                selected_label = st.selectbox("Label Column", options=cols, index=s_idx, key="train_label")
-                
-            if st.button("?? Train Custom Model"):
-                with st.spinner("Training XGBoost Model... This usually takes ~30 seconds."):
-                    try:
-                        # Prepare data
-                        texts = df[selected_text].astype(str).tolist()
-                        labels = df[selected_label].apply(map_sentiment_label).tolist()
-                        
-                        # Filter out invalid labels
-                        valid_data = [(t, l) for t, l in zip(texts, labels) if l in ["Negative", "Neutral", "Positive"]]
-                        if len(valid_data) > 25000:
-                            import random
-                            valid_data = random.sample(valid_data, 25000)
-                            st.warning("Dataset is very large. Randomly sampled 25,000 rows for optimal training performance.")
-                            
-                        if len(valid_data) < 50:
-                            st.error("Dataset has too few valid labels. Ensure labels contain Positive, Negative, or Neutral (or 0,1,2, or 4).")
-                        else:
-                            X = [d[0] for d in valid_data]
-                            y = [d[1] for d in valid_data]
-                            y_num = [{"Negative": 0, "Neutral": 1, "Positive": 2}[lbl] for lbl in y]
-                            
-                            from sklearn.feature_extraction.text import TfidfVectorizer
-                            from xgboost import XGBClassifier
-                            from sklearn.pipeline import Pipeline
-                            from sklearn.metrics import accuracy_score
-                            import joblib
-                            
-                            st.info(f"Training on {len(X)} valid samples...")
-                            
-                            pipeline = Pipeline([
-                                ("tfidf", TfidfVectorizer(max_features=15000, stop_words="english", ngram_range=(1, 2))),
-                                ("clf", XGBClassifier(use_label_encoder=False, eval_metric="mlogloss", max_depth=6, n_estimators=150, learning_rate=0.1))
-                            ])
-                            
-                            pipeline.fit(X, y_num)
-                            acc = accuracy_score(y_num, pipeline.predict(X))
-                            
-                            # Save the new model
-                            import os
-                            model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
-                            joblib.dump(pipeline, model_path)
-                            
-                            st.success(f"?? Model trained successfully! Training Accuracy: {acc*100:.2f}%")
-                            st.balloons()
-                            st.markdown("**Your custom model is now saved globally!** The app will automatically use it for all future predictions. You don't need to retrain it.")
-                    except Exception as e:
-                        st.error(f"Training failed: {e}")
-
-    import os
-    model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
-    if os.path.exists(model_path):
-        st.markdown("---")
-        st.warning("You currently have a Custom Model active.")
-        if st.button("🗑️ Delete Custom Model & Revert to RoBERTa"):
-            os.remove(model_path)
-            st.success("Custom model deleted. The app will now use the highly accurate RoBERTa model.")
-            st.rerun()
 
