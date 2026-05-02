@@ -979,27 +979,38 @@ if mode == "Analyze Dataset":
                     st.info("Label column detected! Automatically training custom model for high accuracy...")
                     with st.spinner("Training XGBoost Model on dataset..."):
                         try:
-                            labels = df[selected_label].apply(map_sentiment_label).tolist()
-                            valid_data = [(t, l) for t, l in zip(texts, labels) if l in ["Negative", "Neutral", "Positive"]]
+                            labels_list = df[selected_label].apply(map_sentiment_label).tolist()
+                            valid_data = [(t, l) for t, l in zip(texts, labels_list) if l in ["Negative", "Neutral", "Positive"]]
                             
-                            if len(valid_data) > 25000:
-                                import random
-                                valid_data = random.sample(valid_data, 25000)
-                                st.warning("Dataset is very large. Randomly sampled 25,000 rows for optimal training.")
-                                
-                            if len(valid_data) < 10:
-                                st.error("Dataset has too few valid labels. Cannot train.")
+                            X = [d[0] for d in valid_data]
+                            y = [d[1] for d in valid_data]
+                            y_num = [{"Negative": 0, "Neutral": 1, "Positive": 2}[lbl] for lbl in y]
+                            
+                            import os
+                            import joblib
+                            model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+                            
+                            if os.path.exists(model_path):
+                                st.info("✅ Found an existing custom model! Evaluating the dataset without retraining...")
+                                pipeline = joblib.load(model_path)
+                                y_pred_num = pipeline.predict(X)
                             else:
-                                X = [d[0] for d in valid_data]
-                                y = [d[1] for d in valid_data]
-                                y_num = [{"Negative": 0, "Neutral": 1, "Positive": 2}[lbl] for lbl in y]
-                                
+                                st.info("Label column detected! Automatically training custom model for high accuracy...")
+                                if len(valid_data) > 25000:
+                                    import random
+                                    valid_data = random.sample(valid_data, 25000)
+                                    X = [d[0] for d in valid_data]
+                                    y = [d[1] for d in valid_data]
+                                    y_num = [{"Negative": 0, "Neutral": 1, "Positive": 2}[lbl] for lbl in y]
+                                    st.warning("Dataset is very large. Randomly sampled 25,000 rows for optimal training.")
+                                    
+                                if len(valid_data) < 10:
+                                    st.error("Dataset has too few valid labels. Cannot train.")
+                                    st.stop()
+                                    
                                 from sklearn.feature_extraction.text import TfidfVectorizer
                                 from xgboost import XGBClassifier
                                 from sklearn.pipeline import Pipeline
-                                from sklearn.metrics import accuracy_score, classification_report
-                                import joblib
-                                import os
                                 
                                 pipeline = Pipeline([
                                     ("tfidf", TfidfVectorizer(max_features=15000, stop_words="english", ngram_range=(1, 2))),
@@ -1008,40 +1019,60 @@ if mode == "Analyze Dataset":
                                 
                                 pipeline.fit(X, y_num)
                                 y_pred_num = pipeline.predict(X)
-                                acc = accuracy_score(y_num, y_pred_num)
                                 
-                                # Save the model
-                                model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
                                 joblib.dump(pipeline, model_path)
-                                
-                                st.success(f"✅ Model trained and saved successfully!")
+                                st.success("✅ Model trained and saved permanently!")
                                 st.balloons()
                                 
-                                # Accuracy Meter Display
-                                st.markdown("---")
-                                st.markdown("## 📊 Accuracy Meter Results")
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.metric("Model Accuracy", f"{acc*100:.2f}%")
-                                with col2:
-                                    st.metric("Total Valid Samples", len(valid_data))
-                                    
-                                if acc >= 0.8:
-                                    st.success("✅ High Accuracy Achieved!")
-                                else:
-                                    st.warning("⚠️ Accuracy is below 80%. Consider a larger or cleaner dataset.")
-                                    
-                                # Detailed results for download
-                                pred_labels_text = [{0: "Negative", 1: "Neutral", 2: "Positive"}[p] for p in y_pred_num]
-                                results_df = pd.DataFrame({
-                                    "Text": X,
-                                    "Actual_Sentiment": y,
-                                    "Predicted_Sentiment": pred_labels_text
-                                })
-                                st.dataframe(results_df.head(20))
+                            from sklearn.metrics import accuracy_score, classification_report, f1_score
+                            acc = accuracy_score(y_num, y_pred_num)
+                            try:
+                                f1 = f1_score(y_num, y_pred_num, average='weighted')
+                            except Exception:
+                                f1 = 0.0
+                            
+                            st.markdown("---")
+                            st.markdown("## 📊 Dataset Overview & Accuracy Results")
+                            
+                            # Metrics
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Model Accuracy", f"{acc*100:.2f}%")
+                            with col2:
+                                st.metric("F1 Score (Weighted)", f"{f1*100:.2f}%")
+                            with col3:
+                                st.metric("Total Valid Samples", len(valid_data))
                                 
-                                csv_bytes = results_df.to_csv(index=False).encode("utf-8")
-                                st.download_button("Download Accuracy Results (CSV)", data=csv_bytes, file_name="accuracy_results.csv", mime="text/csv")
+                            # Classification Report
+                            st.markdown("### Detailed Metrics")
+                            try:
+                                report = classification_report(y_num, y_pred_num, target_names=["Negative", "Neutral", "Positive"])
+                                st.code(report)
+                            except Exception:
+                                st.write("Could not generate classification report.")
+                            
+                            # Pie chart and wordcloud
+                            pred_labels_text = [{0: "Negative", 1: "Neutral", 2: "Positive"}.get(p, "Neutral") for p in y_pred_num]
+                            results_df = pd.DataFrame({
+                                "Text": X,
+                                "Actual_Sentiment": y,
+                                "Predicted_Sentiment": pred_labels_text
+                            })
+                            
+                            st.markdown("### Prediction Distribution")
+                            col_chart, col_cloud = st.columns(2)
+                            with col_chart:
+                                counts = results_df["Predicted_Sentiment"].value_counts()
+                                render_pie_chart(counts, title="Predicted Sentiment Distribution")
+                            with col_cloud:
+                                st.markdown("**Keyword Cloud**")
+                                generate_wordcloud(X, "Common Words in Dataset")
+                            
+                            st.markdown("### Prediction Previews")
+                            st.dataframe(results_df.head(20))
+                            
+                            csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+                            st.download_button("Download Full Results (CSV)", data=csv_bytes, file_name="accuracy_results.csv", mime="text/csv")
                         except Exception as e:
                             st.error(f"Training and evaluation failed: {e}")
                 else:
