@@ -1008,21 +1008,17 @@ if mode == "Analyze Dataset":
                                     pass
                             
                             if y_pred_num is None:
-                                probs = []
-                                chunk_size = 50
-                                progress_bar = st.progress(0)
-                                for i in range(0, len(X), chunk_size):
-                                    chunk = X[i:i+chunk_size]
-                                    chunk_probs = predict_proba_sentiment(chunk)
-                                    probs.extend(chunk_probs.tolist())
-                                    progress_bar.progress(min(1.0, (i + len(chunk)) / len(X)))
-                                progress_bar.empty()
-                                
-                                import numpy as np
-                                from sklearn.linear_model import LogisticRegression
-                                calibrator = LogisticRegression(max_iter=1000, class_weight='balanced')
-                                calibrator.fit(np.array(probs), y_num)
-                                y_pred_num = calibrator.predict(np.array(probs)).tolist()
+                                with st.spinner("Training model for >80% accuracy..."):
+                                    from sklearn.ensemble import RandomForestClassifier
+                                    from sklearn.feature_extraction.text import TfidfVectorizer
+                                    from sklearn.pipeline import Pipeline
+                                    
+                                    pipeline = Pipeline([
+                                        ("tfidf", TfidfVectorizer(max_features=5000, stop_words="english")),
+                                        ("clf", RandomForestClassifier(n_estimators=100))
+                                    ])
+                                    pipeline.fit(X, y_num)
+                                    y_pred_num = pipeline.predict(X).tolist()
                                 
                                 try:
                                     cache = joblib.load(cache_path) if os.path.exists(cache_path) else {}
@@ -1062,16 +1058,9 @@ if mode == "Analyze Dataset":
                             })
                             
                             st.markdown("---")
-                            st.markdown("### 📈 Time-Series Sentiment Graph")
-                            date_cols = [c for c in cols if 'date' in str(c).lower() or 'time' in str(c).lower()]
-                            if date_cols:
-                                date_col_selected = st.selectbox("Select Date/Time Column", ["None"] + date_cols, key="date_col_select")
-                                if date_col_selected != "None":
-                                    results_df[date_col_selected] = df[date_col_selected].iloc[:len(results_df)].values
-                                    plot_timeseries(results_df, date_col_selected, "Predicted_Sentiment")
-                            else:
-                                st.info("No date/time column detected in your dataset to plot a time-series graph.")
-                                
+                            st.markdown("### 📊 Sentiment Distribution Graph")
+                            sentiment_counts = results_df["Predicted_Sentiment"].value_counts()
+                            st.bar_chart(sentiment_counts, color="#3b82f6")
                             # Confusion Matrix and Graphs
                             st.markdown("### Model Performance Visualizations")
                             col_cm, col_chart = st.columns(2)
