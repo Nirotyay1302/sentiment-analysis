@@ -470,58 +470,6 @@ def read_csv_with_header_detection(uploaded):
 
 st.set_page_config(page_title="Social Media Sentiment Analyzer", layout="centered", initial_sidebar_state="expanded")
 
-# Inject Modern CSS Styling
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-    }
-    .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-    }
-    h1, h2, h3, h4, h5, h6 {
-        color: #f8fafc !important;
-        font-weight: 800;
-    }
-    .stButton>button {
-        background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 0.6rem 1.2rem;
-        font-weight: 600;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-    }
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-        color: white;
-    }
-    div[data-testid="stMetricValue"] {
-        color: #60a5fa !important;
-        font-weight: 800 !important;
-    }
-    div[data-testid="stMetric"] {
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
-        padding: 15px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        backdrop-filter: blur(10px);
-    }
-    .stSelectbox>div>div, .stTextInput>div>div, .stFileUploader>div>div {
-        border-radius: 8px;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        background-color: rgba(255, 255, 255, 0.05) !important;
-    }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
-
-
 st.markdown(
     """
     <style>
