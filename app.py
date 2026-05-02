@@ -449,19 +449,19 @@ def read_csv_with_header_detection(uploaded):
             if 'social media' in first0 or 'sentiments' in first0 or 'social' in first0:
                 header_row = 1
 
-        # Read the full CSV using detected header
-        if hasattr(uploaded, 'read'):
-            uploaded.seek(0)
-            if header_row is not None:
-                df = pd.read_csv(uploaded, header=header_row, dtype=str, keep_default_na=False)  # type: ignore
-            else:
-                uploaded.seek(0)
-                df = pd.read_csv(uploaded, header=0, dtype=str, keep_default_na=False)
-        else:
-            if header_row is not None:
-                df = pd.read_csv(uploaded, header=header_row, dtype=str, keep_default_na=False)  # type: ignore
-            else:
-                df = pd.read_csv(uploaded, header=0, dtype=str, keep_default_na=False)
+        # Helper to read full CSV safely with multiple encodings
+        def safe_read_full_csv(file_obj, header_idx):
+            encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+            for enc in encodings:
+                try:
+                    if hasattr(file_obj, 'seek'): file_obj.seek(0)
+                    return pd.read_csv(file_obj, header=header_idx, dtype=str, keep_default_na=False, encoding=enc)
+                except UnicodeDecodeError:
+                    continue
+            if hasattr(file_obj, 'seek'): file_obj.seek(0)
+            return pd.read_csv(file_obj, header=header_idx, dtype=str, keep_default_na=False, encoding='utf-8', encoding_errors='replace')
+
+        df = safe_read_full_csv(uploaded, header_row if header_row is not None else 0)
 
         return df, header_row
     except Exception as e:
