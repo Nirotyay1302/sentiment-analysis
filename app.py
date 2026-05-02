@@ -212,22 +212,23 @@ def map_sentiment_label(label):
     # Default to neutral if unclear
     return "Neutral"
 
-def predict_sentiment(texts, use_custom=False):
-    """Predict sentiment using backend API, falling back to direct model load."""
+def predict_sentiment(texts):
+    """Predict sentiment using custom model if exists, else backend API."""
     if isinstance(texts, str):
         texts = [texts]
         
-    if use_custom:
-        try:
-            import joblib
-            model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
-            if os.path.exists(model_path):
-                model = joblib.load(model_path)
-                return model.predict(texts).tolist()
-        except:
-            pass
+    try:
+        import joblib
+        import os
+        model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+            return model.predict(texts).tolist()
+    except Exception as e:
+        print(f"Failed to use custom model: {e}")
             
     try:
+        import requests
         res = requests.post("http://127.0.0.1:8000/predict", json={"texts": texts}, timeout=60)
         if res.status_code == 200:
             preds = res.json().get("predictions", [])
@@ -239,28 +240,31 @@ def predict_sentiment(texts, use_custom=False):
     
     return [1] * len(texts)
 
-def predict_proba_sentiment(texts, use_custom=False):
-    """Predict sentiment probabilities using backend API, falling back to direct model load."""
+def predict_proba_sentiment(texts):
+    """Predict probabilities using custom model if exists, else backend API."""
     if isinstance(texts, str):
         texts = [texts]
         
-    if use_custom:
-        try:
-            import joblib
-            model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
-            if os.path.exists(model_path):
-                model = joblib.load(model_path)
-                return model.predict_proba(texts)
-        except:
-            pass
+    try:
+        import joblib
+        import os
+        model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+            return model.predict_proba(texts)
+    except Exception as e:
+        print(f"Failed to use custom model for proba: {e}")
             
     try:
+        import requests
+        import numpy as np
         res = requests.post("http://127.0.0.1:8000/predict", json={"texts": texts}, timeout=60)
         if res.status_code == 200:
             return np.array(res.json().get("probabilities", []))
     except Exception as e:
         print(f"Backend API probability prediction failed: {e}")
     
+    import numpy as np
     return np.array([[0.2, 0.6, 0.2]] * len(texts))
 
 def ensure_model_ui():
@@ -509,9 +513,7 @@ mode = st.sidebar.selectbox(
     "Select Analysis Mode",
     [
         "Analyze Dataset",
-        "Analyze Social Media Link",
         "Analyze Image/Screenshot",
-        "Accuracy Meter/Validation",
         "Manual Text Input",
         "Train Custom Model",
         "Prediction History (Database)"
@@ -520,7 +522,17 @@ mode = st.sidebar.selectbox(
 )
 
 st.sidebar.markdown("---")
-use_custom = st.sidebar.checkbox("Use Custom Trained Model", value=False, help="Enable this to use the model you trained in the 'Train Custom Model' tab instead of the default Transformer.")
+
+# Add Model Info section
+st.sidebar.markdown("---")
+st.sidebar.header("🧠 Active Model")
+import os
+if os.path.exists(os.path.join(os.path.dirname(__file__), "model.joblib")):
+    st.sidebar.success("✅ Custom Trained Model")
+    st.sidebar.caption("Using your locally trained model.")
+else:
+    st.sidebar.info("🤖 RoBERTa Default Model")
+    st.sidebar.caption("Using CardiffNLP RoBERTa (High Accuracy).")
 
 # Add Model Info section
 st.sidebar.markdown("---")
@@ -1249,150 +1261,6 @@ if mode == "Analyze Dataset":
                 except Exception as e:
                     st.error(f"Could not prepare download: {e}")
 
-# ----------- Mode 2: Social Media Analyzer (Twitter/YouTube) -----------
-elif mode == "Analyze Social Media Link":
-    st.subheader("📱 Social Media Sentiment Analysis")
-    
-    # Informative message about social media scraping
-    st.info("""
-    **ℹ️ Note**: Social media scraping has limitations on cloud platforms due to API restrictions and library compatibility.
-    
-    **Alternative Options**:
-    - 📊 **Upload CSV**: Export social media data and upload as CSV (Recommended)
-    - 📝 **Manual Input**: Copy and paste text manually
-    - 🔗 **Use Dataset Mode**: Best for bulk analysis
-    """)
-    
-    # Show status of scraping libraries
-    col1, col2 = st.columns(2)
-    with col1:
-        if SNSCRAPE_AVAILABLE:
-            st.success("✅ Twitter scraping available")
-        else:
-            st.info("ℹ️ Twitter scraping not available (use CSV upload instead)")
-    
-    with col2:
-        if YOUTUBE_DL_AVAILABLE:
-            st.success("✅ YouTube scraping available")
-        else:
-            st.info("ℹ️ YouTube scraping not available (use CSV upload instead)")
-    
-    # Provide option to upload CSV as alternative
-    st.markdown("---")
-    st.markdown("### Option 1: Upload Social Media Data (CSV)")
-    st.markdown("Export your social media data (Twitter/YouTube comments) to CSV and upload here:")
-    uploaded_csv = st.file_uploader("Upload social media data (CSV)", type=["csv"], key="social_csv_uploader")
-    
-    if uploaded_csv is not None:
-        st.info("💡 Switch to 'Analyze Dataset' mode to analyze the uploaded CSV file.")
-        st.markdown("---")
-    
-    # Original link-based approach
-    st.markdown("### Option 2: Direct Link Analysis")
-    st.markdown("*Note: This feature may not work on all platforms due to API restrictions.*")
-    
-    link = st.text_input("Paste a Twitter or YouTube link (optional):")
-    if st.button("Fetch & Analyze"):
-        # Ensure model is available before analysis
-        if not ensure_model_ui():
-            st.stop()
-
-        comments = []
-
-        # Twitter support
-        if "twitter.com" in link or "x.com" in link:
-            if not SNSCRAPE_AVAILABLE:
-                st.error("""
-                **Twitter scraping is not available on this platform.**
-                
-                **Recommended alternatives**:
-                1. **Export Twitter data**: Use Twitter's export feature or third-party tools
-                2. **Upload as CSV**: Switch to 'Analyze Dataset' mode and upload your CSV
-                3. **Manual input**: Copy and paste tweets manually in 'Manual Text Input' mode
-                
-                *Note: Twitter API restrictions and library compatibility issues prevent direct scraping on cloud platforms.*
-                """)
-                st.stop()
-            comments = fetch_twitter_replies(link, limit=100)
-
-        # YouTube support
-        elif "youtube.com" in link or "youtu.be" in link:
-            if not YOUTUBE_DL_AVAILABLE:
-                st.error("""
-                **YouTube comment scraping is not available on this platform.**
-                
-                **Recommended alternatives**:
-                1. **Export comments**: Use YouTube Data API or browser extensions to export comments
-                2. **Upload as CSV**: Switch to 'Analyze Dataset' mode and upload your CSV
-                3. **Manual input**: Copy and paste comments manually in 'Manual Text Input' mode
-                
-                *Note: YouTube API restrictions prevent direct comment scraping on cloud platforms.*
-                """)
-                st.stop()
-            comments = fetch_youtube_comments(link, limit=100)
-        
-        elif not link:
-            st.warning("Please provide a valid Twitter or YouTube link, or upload a CSV file above.")
-            st.stop()
-        
-        else:
-            st.error("Invalid link. Please provide a valid Twitter (twitter.com or x.com) or YouTube (youtube.com) link.")
-            st.stop()
-
-        if comments:
-            cleaned_comments = [clean_text(c) for c in comments]
-            
-            # Ensure model UI is set up (will try to load transformer)
-            ensure_model_ui()
-            
-            # Add progress bar for social media analysis
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # Process with progress updates
-            chunk_size = max(1, len(cleaned_comments) // 20)  # Update 20 times
-            preds = []
-            for i in range(0, len(cleaned_comments), chunk_size):
-                chunk = cleaned_comments[i:i+chunk_size]
-                chunk_preds = predict_sentiment(chunk)
-                preds.extend(chunk_preds)
-                
-                # Update progress
-                progress = min(1.0, (i + len(chunk)) / len(cleaned_comments))
-                progress_bar.progress(progress)
-                status_text.text(f"Analyzing {len(preds)}/{len(cleaned_comments)} comments...")
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            df = pd.DataFrame({"Comment": comments, "Predicted": preds})
-            df["Sentiment"] = df["Predicted"].map(labels)  # type: ignore
-            # Sentiment filter
-            sentiment_choices = ["Positive", "Neutral", "Negative"]
-            selected_sentiments = st.multiselect("Filter comments by sentiment (text)", options=sentiment_choices, default=sentiment_choices, key="social_sentiment_filter")
-
-            filtered_comments = df[df["Sentiment"].isin(selected_sentiments)] if selected_sentiments else df
-
-            st.dataframe(filtered_comments.head(20))
-            ordered_labels = ["Positive", "Neutral", "Negative"]
-            counts = filtered_comments["Sentiment"].value_counts().reindex(ordered_labels, fill_value=0)  # type: ignore
-            if counts.sum() > 0:
-                render_pie_chart(counts, colors=["#2ecc71", "#f1c40f", "#e74c3c"])
-                st.markdown("**Counts (bar):**")
-                st.bar_chart(counts)
-            else:
-                st.info("No comments match the selected sentiment filters.")
-
-            # Download filtered comments
-            try:
-                csv_bytes = filtered_comments.to_csv(index=False).encode("utf-8")
-                st.download_button("Download comments as CSV", data=csv_bytes, file_name="social_comments.csv", mime="text/csv", key="download_social")
-            except Exception as e:
-                st.error(f"Could not prepare download: {e}")
-        else:
-            st.error("No comments found or could not fetch comments.")
-
-# ----------- Mode 3: Image/Screenshot Analyzer -----------
 elif mode == "Analyze Image/Screenshot":
     st.subheader("📸 Image & Screenshot Sentiment Analysis")
     
@@ -1564,254 +1432,6 @@ elif mode == "Analyze Image/Screenshot":
                         # Variables not defined (analysis didn't complete)
                         pass
 
-# ----------- Mode 4: Accuracy Meter/Validation -----------
-elif mode == "Accuracy Meter/Validation":
-    st.subheader("📊 Accuracy Meter & Model Validation")
-    
-    st.info("""
-    **Compare predicted sentiments with actual labels to measure model accuracy.**
-    
-    **Two comparison modes**:
-    1. **Single Dataset**: Compare predictions with labels in the same dataset
-    2. **Two Datasets**: Compare a reference dataset (with labels) with a test dataset (without labels)
-    """)
-    
-    # Ensure model is available
-    if not ensure_model_ui():
-        st.stop()
-    
-    # Comparison mode selection
-    comparison_mode = st.radio(
-        "Select comparison mode:",
-        ["Single Dataset (with labels)", "Two Datasets (reference + test)"],
-        key="comparison_mode_radio"
-    )
-    
-    if comparison_mode == "Single Dataset (with labels)":
-        st.markdown("### Step 1: Upload Reference Dataset")
-        st.markdown("Upload a CSV file with text and actual sentiment labels:")
-        
-        reference_file = st.file_uploader(
-            "Upload reference dataset (CSV with text and sentiment columns)",
-            type=["csv"],
-            key="accuracy_reference_uploader"
-        )
-    else:
-        st.markdown("### Step 1: Upload Reference Dataset (with labels)")
-        st.markdown("Upload a CSV file with text and actual sentiment labels:")
-        
-        reference_file = st.file_uploader(
-            "Upload reference dataset (CSV with text and sentiment columns)",
-            type=["csv"],
-            key="accuracy_reference_uploader_2"
-        )
-        
-        st.markdown("### Step 2: Upload Test Dataset (without labels)")
-        st.markdown("Upload a CSV file with text only (no sentiment labels):")
-        
-        test_file = st.file_uploader(
-            "Upload test dataset (CSV with text column only)",
-            type=["csv"],
-            key="accuracy_test_uploader"
-        )
-    
-    if reference_file is not None:
-        # Read reference dataset
-        df_ref, header_row = read_csv_with_header_detection(reference_file)
-        
-        if df_ref is None:
-            st.error("Could not parse uploaded CSV.")
-        else:
-            st.success(f"✅ Reference dataset loaded: {len(df_ref)} rows")
-            
-            # Auto-detect columns (excluding numerical)
-            cols = list(df_ref.columns)
-            text_col = detect_text_column(df_ref, exclude_numerical=True)
-            
-            # Find sentiment/label column
-            sentiment_col = None
-            for c in cols:
-                if 'sentiment' in str(c).lower() or 'label' in str(c).lower():
-                    sentiment_col = c
-                    break
-            
-            # Filter numerical columns
-            non_numerical_cols = [c for c in cols if not is_numerical_column(df_ref[c])]
-            
-            if not non_numerical_cols:
-                st.error("⚠️ No suitable text columns found. All columns appear to be numerical.")
-                st.stop()
-            
-            # Warn about numerical columns
-            numerical_cols = [c for c in cols if is_numerical_column(df_ref[c])]
-            if numerical_cols:
-                st.info(f"ℹ️ Excluded {len(numerical_cols)} numerical column(s) from text analysis: {', '.join(numerical_cols[:5])}")
-            
-            # Let user select columns
-            st.markdown("### Step 2: Select Columns")
-            if text_col and text_col in non_numerical_cols:
-                default_idx = non_numerical_cols.index(text_col)
-            else:
-                default_idx = 0
-            
-            text_col = st.selectbox(
-                "Select text column (numerical columns excluded):",
-                options=non_numerical_cols,
-                index=default_idx,
-                key="accuracy_text_col"
-            )
-            
-            if sentiment_col:
-                sentiment_col = st.selectbox("Select sentiment/label column:", options=cols, index=cols.index(sentiment_col), key="accuracy_sentiment_col")
-            else:
-                sentiment_col = st.selectbox("Select sentiment/label column:", options=cols, key="accuracy_sentiment_col")
-            
-            # Show preview
-            st.markdown("### Preview")
-            preview_df = df_ref[[text_col, sentiment_col]].head(10)
-            st.dataframe(preview_df)
-            
-            # Validate labels (silently - don't show warning for non-standard labels)
-            # The app will work with any labels, but only Positive/Negative/Neutral are used for accuracy calculation
-            
-            if st.button("Calculate Accuracy", key="calculate_accuracy_btn"):
-                # Clean and prepare data
-                texts = df_ref[text_col].astype(str).apply(clean_text).tolist()
-                actual_labels = df_ref[sentiment_col].astype(str).str.strip().tolist()
-                
-                # Normalize labels using the same mapping function as training
-                actual_labels = [map_sentiment_label(l) for l in actual_labels]
-                
-                # Predict sentiments
-                with st.spinner("Predicting sentiments..."):
-                    if not ensure_model_ui():
-                        st.stop()
-                    predicted_numeric = predict_sentiment(texts, use_custom=use_custom)
-                    predicted_labels = [labels[p] for p in predicted_numeric]
-                
-                # Calculate metrics
-                with st.spinner("Calculating accuracy metrics..."):
-                    metrics = calculate_accuracy_metrics(actual_labels, predicted_labels)
-                
-                # Display results
-                st.markdown("---")
-                st.markdown("## 📊 Accuracy Results")
-                
-                # Overall metrics
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Overall Accuracy", f"{metrics['accuracy']*100:.2f}%")
-                with col2:
-                    st.metric("Total Samples", metrics['total_samples'])
-                with col3:
-                    st.metric("Correct", metrics['correct_predictions'], delta=f"+{metrics['correct_predictions']}")
-                with col4:
-                    st.metric("Incorrect", metrics['incorrect_predictions'], delta=f"-{metrics['incorrect_predictions']}", delta_color="inverse")
-                
-                # Accuracy visualization
-                accuracy_percent = metrics['accuracy'] * 100
-                if accuracy_percent >= 80:
-                    st.success(f"✅ Excellent accuracy: {accuracy_percent:.2f}%")
-                elif accuracy_percent >= 60:
-                    st.info(f"⚠️ Good accuracy: {accuracy_percent:.2f}%")
-                else:
-                    st.warning(f"⚠️ Low accuracy: {accuracy_percent:.2f}% - Consider retraining the model")
-                
-                # Per-class metrics
-                if "per_class" in metrics:
-                    st.markdown("### Per-Class Metrics")
-                    class_data = []
-                    for label, class_metrics in metrics["per_class"].items():
-                        if "precision" in class_metrics:
-                            class_data.append({
-                                "Class": label,
-                                "Precision": f"{class_metrics['precision']*100:.2f}%",
-                                "Recall": f"{class_metrics['recall']*100:.2f}%",
-                                "F1-Score": f"{class_metrics['f1_score']*100:.2f}%",
-                                "Support": class_metrics['support']
-                            })
-                        else:
-                            class_data.append({
-                                "Class": label,
-                                "Accuracy": f"{class_metrics['accuracy']*100:.2f}%",
-                                "Support": class_metrics['support']
-                            })
-                    
-                    if class_data:
-                        class_df = pd.DataFrame(class_data)
-                        st.dataframe(class_df, use_container_width=True, hide_index=True)
-                
-                # Macro averages
-                if "macro_avg" in metrics:
-                    st.markdown("### Macro Averages")
-                    macro_col1, macro_col2, macro_col3 = st.columns(3)
-                    with macro_col1:
-                        st.metric("Macro Precision", f"{metrics['macro_avg']['precision']*100:.2f}%")
-                    with macro_col2:
-                        st.metric("Macro Recall", f"{metrics['macro_avg']['recall']*100:.2f}%")
-                    with macro_col3:
-                        st.metric("Macro F1-Score", f"{metrics['macro_avg']['f1_score']*100:.2f}%")
-                
-                # Confusion Matrix
-                if "confusion_matrix" in metrics:
-                    st.markdown("### Confusion Matrix")
-                    cm = np.array(metrics["confusion_matrix"])
-                    cm_fig = plot_confusion_matrix(cm)
-                    if cm_fig:
-                        st.pyplot(cm_fig)
-                    else:
-                        # Fallback: show as table
-                        cm_df = pd.DataFrame(
-                            cm,
-                            index=["Actual: Negative", "Actual: Neutral", "Actual: Positive"],
-                            columns=["Pred: Negative", "Pred: Neutral", "Pred: Positive"]
-                        )
-                        st.dataframe(cm_df)
-                
-                # Classification Report
-                if "classification_report" in metrics:
-                    st.markdown("### 📋 Classification Report")
-                    if isinstance(metrics["classification_report"], str):
-                        # Display as code block for better formatting
-                        st.code(metrics["classification_report"], language=None)
-                    else:
-                        # If it's not a string, try to generate it
-                        try:
-                            if SKLEARN_METRICS_AVAILABLE:
-                                # Convert labels to numeric for report generation
-                                label_map = {"Negative": 0, "Neutral": 1, "Positive": 2}
-                                y_true_num = [label_map.get(l, 1) if isinstance(l, str) else int(l) for l in actual_labels]
-                                y_pred_num = [label_map.get(l, 1) if isinstance(l, str) else int(l) for l in predicted_labels]
-                                report_text = classification_report(
-                                    y_true_num, y_pred_num,
-                                    target_names=["Negative", "Neutral", "Positive"],
-                                    output_dict=False
-                                )
-                                st.code(report_text, language=None)
-                            else:
-                                st.info("Classification report requires sklearn library.")
-                        except Exception as e:
-                            st.warning(f"Could not generate classification report: {e}")
-                
-                # Download results
-                st.markdown("---")
-                st.markdown("### 💾 Download Results")
-                results_df = pd.DataFrame({
-                    "text": texts,
-                    "actual_label": actual_labels,
-                    "predicted_label": predicted_labels,
-                    "match": [a == p for a, p in zip(actual_labels, predicted_labels)]
-                })
-                csv_bytes = results_df.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    "Download accuracy results as CSV",
-                    data=csv_bytes,
-                    file_name="accuracy_results.csv",
-                    mime="text/csv",
-                    key="download_accuracy_results"
-                )
-
-# ----------- Mode 5: Manual Text Input -----------
 elif mode == "Manual Text Input":
     # Ensure model UI is set up (will try to load transformer)
     ensure_model_ui()
@@ -1963,7 +1583,17 @@ elif mode == "Train Custom Model":
                             
                             st.success(f"?? Model trained successfully! Training Accuracy: {acc*100:.2f}%")
                             st.balloons()
-                            st.markdown("**Your custom model is now saved!** You can head to the 'Analyze Dataset' tab and it will now evaluate your dataset with your newly trained model.")
+                            st.markdown("**Your custom model is now saved globally!** The app will automatically use it for all future predictions. You don't need to retrain it.")
                     except Exception as e:
                         st.error(f"Training failed: {e}")
+
+    import os
+    model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
+    if os.path.exists(model_path):
+        st.markdown("---")
+        st.warning("You currently have a Custom Model active.")
+        if st.button("🗑️ Delete Custom Model & Revert to RoBERTa"):
+            os.remove(model_path)
+            st.success("Custom model deleted. The app will now use the highly accurate RoBERTa model.")
+            st.rerun()
 
