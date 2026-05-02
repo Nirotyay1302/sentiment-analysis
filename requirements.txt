@@ -27,3 +27,4 @@ regex
 tqdm
 
 
+seaborn
