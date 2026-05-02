@@ -1018,17 +1018,14 @@ if mode == "Analyze Dataset":
                                     pass
                             
                             if y_pred_num is None:
-                                with st.spinner("Training model for >80% accuracy..."):
-                                    from sklearn.ensemble import RandomForestClassifier
-                                    from sklearn.feature_extraction.text import TfidfVectorizer
-                                    from sklearn.pipeline import Pipeline
-                                    
-                                    pipeline = Pipeline([
-                                        ("tfidf", TfidfVectorizer(max_features=5000, stop_words="english")),
-                                        ("clf", RandomForestClassifier(n_estimators=100))
-                                    ])
-                                    pipeline.fit(X, y_num)
-                                    y_pred_num = pipeline.predict(X).tolist()
+                                y_pred_num = []
+                                chunk_size = 50
+                                progress_bar = st.progress(0)
+                                for i in range(0, len(X), chunk_size):
+                                    chunk = X[i:i+chunk_size]
+                                    y_pred_num.extend(predict_sentiment(chunk))
+                                    progress_bar.progress(min(1.0, (i + len(chunk)) / len(X)))
+                                progress_bar.empty()
                                 
                                 try:
                                     cache = joblib.load(cache_path) if os.path.exists(cache_path) else {}
