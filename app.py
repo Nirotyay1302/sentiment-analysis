@@ -451,15 +451,20 @@ def read_csv_with_header_detection(uploaded):
 
         # Helper to read full CSV safely with multiple encodings
         def safe_read_full_csv(file_obj, header_idx):
+            kwargs = {'header': header_idx, 'dtype': str, 'keep_default_na': False}
+            if hasattr(file_obj, 'size') and file_obj.size > 50 * 1024 * 1024:
+                kwargs['nrows'] = 50000
+                st.warning("File is extremely large (>50MB). Only loading the first 50,000 rows to prevent Streamlit memory crashes.")
+                
             encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
             for enc in encodings:
                 try:
                     if hasattr(file_obj, 'seek'): file_obj.seek(0)
-                    return pd.read_csv(file_obj, header=header_idx, dtype=str, keep_default_na=False, encoding=enc)
+                    return pd.read_csv(file_obj, encoding=enc, **kwargs)
                 except UnicodeDecodeError:
                     continue
             if hasattr(file_obj, 'seek'): file_obj.seek(0)
-            return pd.read_csv(file_obj, header=header_idx, dtype=str, keep_default_na=False, encoding='utf-8', encoding_errors='replace')
+            return pd.read_csv(file_obj, encoding='utf-8', encoding_errors='replace', **kwargs)
 
         df = safe_read_full_csv(uploaded, header_row if header_row is not None else 0)
 
@@ -985,6 +990,11 @@ if mode == "Analyze Dataset":
                             if not valid_data:
                                 st.error("No valid labels found in the selected column.")
                                 st.stop()
+                                
+                            if len(valid_data) > 15000:
+                                import random
+                                valid_data = random.sample(valid_data, 15000)
+                                st.warning("Dataset is extremely large! Randomly sampled 15,000 rows for analysis to prevent server memory crashes.")
                                 
                             X = [d[0] for d in valid_data]
                             y = [d[1] for d in valid_data]
