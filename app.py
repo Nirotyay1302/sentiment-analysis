@@ -1053,6 +1053,25 @@ if mode == "Analyze Dataset":
                             with col3:
                                 st.metric("Total Valid Samples", len(valid_data))
                                 
+                            # Prepare results dataframe
+                            pred_labels_text = [{0: "Negative", 1: "Neutral", 2: "Positive"}.get(p, "Neutral") for p in y_pred_num]
+                            results_df = pd.DataFrame({
+                                "Text": X,
+                                "Actual_Sentiment": y,
+                                "Predicted_Sentiment": pred_labels_text
+                            })
+                            
+                            st.markdown("---")
+                            st.markdown("### 📈 Time-Series Sentiment Graph")
+                            date_cols = [c for c in cols if 'date' in str(c).lower() or 'time' in str(c).lower()]
+                            if date_cols:
+                                date_col_selected = st.selectbox("Select Date/Time Column", ["None"] + date_cols, key="date_col_select")
+                                if date_col_selected != "None":
+                                    results_df[date_col_selected] = df[date_col_selected].iloc[:len(results_df)].values
+                                    plot_timeseries(results_df, date_col_selected, "Predicted_Sentiment")
+                            else:
+                                st.info("No date/time column detected in your dataset to plot a time-series graph.")
+                                
                             # Confusion Matrix and Graphs
                             st.markdown("### Model Performance Visualizations")
                             col_cm, col_chart = st.columns(2)
@@ -1070,12 +1089,6 @@ if mode == "Analyze Dataset":
                                 
                             with col_chart:
                                 st.markdown("**Prediction Distribution**")
-                                pred_labels_text = [{0: "Negative", 1: "Neutral", 2: "Positive"}.get(p, "Neutral") for p in y_pred_num]
-                                results_df = pd.DataFrame({
-                                    "Text": X,
-                                    "Actual_Sentiment": y,
-                                    "Predicted_Sentiment": pred_labels_text
-                                })
                                 counts = results_df["Predicted_Sentiment"].value_counts()
                                 render_pie_chart(counts, title="")
                                 
@@ -1089,17 +1102,6 @@ if mode == "Analyze Dataset":
                             
                             st.markdown("### Prediction Previews")
                             st.dataframe(results_df.head(20))
-                            
-                            st.markdown("---")
-                            st.markdown("### 📈 Time-Series Sentiment Graph")
-                            date_cols = [c for c in cols if 'date' in str(c).lower() or 'time' in str(c).lower()]
-                            if date_cols:
-                                date_col_selected = st.selectbox("Select Date/Time Column", ["None"] + date_cols, key="date_col_select")
-                                if date_col_selected != "None":
-                                    results_df[date_col_selected] = df[date_col_selected].iloc[:len(results_df)].values
-                                    plot_timeseries(results_df, date_col_selected, "Predicted_Sentiment")
-                            else:
-                                st.info("No date/time column detected in your dataset to plot a time-series graph.")
                                 
                             csv_bytes = results_df.to_csv(index=False).encode("utf-8")
                             st.download_button("Download Full Results (CSV)", data=csv_bytes, file_name="accuracy_results.csv", mime="text/csv")
