@@ -1006,7 +1006,7 @@ if mode == "Analyze Dataset":
                             
                             # Cache predictions so we don't re-run RoBERTa on the same dataset
                             dataset_hash = hashlib.md5("".join(X).encode('utf-8')).hexdigest()
-                            cache_path = os.path.join(os.path.dirname(__file__), "eval_cache.joblib")
+                            cache_path = os.path.join(os.path.dirname(__file__), "eval_cache_v2.joblib")
                             
                             y_pred_num = None
                             if os.path.exists(cache_path):
