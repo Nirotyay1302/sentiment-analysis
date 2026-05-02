@@ -57,7 +57,7 @@ def main():
     parser.add_argument("--data", help="CSV path; if omitted uses tweet_eval", default=None)
     parser.add_argument("--text-col", default="text")
     parser.add_argument("--label-col", default="label")
-    parser.add_argument("--model", default="distilbert-base-uncased")
+    parser.add_argument("--model", default="cardiffnlp/twitter-roberta-base-sentiment-latest")
     parser.add_argument("--output", default="transformer_model")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch", type=int, default=16)
@@ -84,7 +84,7 @@ def main():
     ds = ds.map(preprocess, batched=True)
     ds.set_format(type="torch", columns=["input_ids","attention_mask","label"])
 
-    model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=3)
+    model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=3, ignore_mismatched_sizes=True)
 
     if EVALUATE_AVAILABLE:
         metric_acc = evaluate.load("accuracy")

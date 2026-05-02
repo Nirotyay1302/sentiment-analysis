@@ -228,15 +228,16 @@ def predict_sentiment(texts, use_custom=False):
             pass
             
     try:
-        from backend.ml_service import ml_service
-        preds = ml_service.analyze_sentiment(texts)
-        # Map text labels back to integers for UI compatibility
-        text_to_num = {"Negative": 0, "Neutral": 1, "Positive": 2}
-        results = [text_to_num.get(p, 1) for p in preds]
-        return results
+        res = requests.post("http://127.0.0.1:8000/predict", json={"texts": texts}, timeout=60)
+        if res.status_code == 200:
+            preds = res.json().get("predictions", [])
+            text_to_num = {"Negative": 0, "Neutral": 1, "Positive": 2}
+            results = [text_to_num.get(p, 1) for p in preds]
+            return results
     except Exception as e:
-        print(f"Direct ml_service prediction failed: {e}")
-        return [1] * len(texts)
+        print(f"Backend API prediction failed: {e}")
+    
+    return [1] * len(texts)
 
 def predict_proba_sentiment(texts, use_custom=False):
     """Predict sentiment probabilities using backend API, falling back to direct model load."""
@@ -254,11 +255,13 @@ def predict_proba_sentiment(texts, use_custom=False):
             pass
             
     try:
-        from backend.ml_service import ml_service
-        return np.array(ml_service.analyze_probabilities(texts))
+        res = requests.post("http://127.0.0.1:8000/predict", json={"texts": texts}, timeout=60)
+        if res.status_code == 200:
+            return np.array(res.json().get("probabilities", []))
     except Exception as e:
-        print(f"Direct ml_service probability prediction failed: {e}")
-        return np.array([[0.2, 0.6, 0.2]] * len(texts))
+        print(f"Backend API probability prediction failed: {e}")
+    
+    return np.array([[0.2, 0.6, 0.2]] * len(texts))
 
 def ensure_model_ui():
     """In-UI helper: check if backend API is reachable."""

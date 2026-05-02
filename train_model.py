@@ -395,7 +395,7 @@ def main():
     parser.add_argument("--output", default="model.joblib", help="Where to save the final model (joblib)")
     # New transformer-related flags
     parser.add_argument("--use-transformer", action="store_true", help="Run transformer fine-tuning and save wrapper to model.joblib")
-    parser.add_argument("--transformer-model", default="distilbert-base-uncased", help="Base model for transformer trainer")
+    parser.add_argument("--transformer-model", default="cardiffnlp/twitter-roberta-base-sentiment-latest", help="Base model for transformer trainer")
     parser.add_argument("--transformer-output", default="transformer_model", help="Directory where transformer trainer will save model")
     parser.add_argument("--transformer-epochs", type=int, default=3)
     parser.add_argument("--transformer-batch", type=int, default=16)
