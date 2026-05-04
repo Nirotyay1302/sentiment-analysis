@@ -1489,11 +1489,16 @@ elif mode == "Train Custom Model":
                             st.info("Loading RoBERTa model...")
                             model = RobertaForSequenceClassification.from_pretrained('roberta-base', num_labels=3)
                             
+                            # FREEZE the base model to prevent Streamlit Cloud Out of Memory (OOM) crashes
+                            # This reduces RAM usage from >2GB down to ~500MB
+                            for param in model.roberta.parameters():
+                                param.requires_grad = False
+                            
                             training_args = TrainingArguments(
                                 output_dir='./results',
                                 num_train_epochs=3,
-                                per_device_train_batch_size=8,
-                                per_device_eval_batch_size=8,
+                                per_device_train_batch_size=4,
+                                per_device_eval_batch_size=4,
                                 eval_strategy="epoch",
                                 save_strategy="epoch",
                                 logging_steps=10,
