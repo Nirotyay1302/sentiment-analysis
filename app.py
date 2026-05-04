@@ -1401,6 +1401,201 @@ elif mode == "Prediction History (Database)":
                     if "emotion" in df_history.columns:
                         em_counts = df_history["emotion"].value_counts().reset_index()
                         em_counts.columns = ["emotion", "count"]
+            if not extracted_texts:
+                st.warning("⚠️ No text could be extracted from the image. Please try:")
+                st.markdown("""
+                - Ensure the image is clear and text is readable
+                - Try a higher resolution image
+                - Check that the image contains visible text
+                - Use 'Manual Text Input' mode to type the text manually
+                """)
+            else:
+                # Display extracted text
+                st.markdown("### 📝 Extracted Text")
+                full_text = " ".join(extracted_texts)
+                
+                # Show individual text segments
+                with st.expander("View extracted text segments"):
+                    for i, text in enumerate(extracted_texts, 1):
+                        st.write(f"**Segment {i}**: {text}")
+                
+                # Show full combined text
+                st.text_area("Full extracted text:", value=full_text, height=150, key="extracted_text_display")
+                
+                # Analyze sentiment
+                if full_text.strip():
+                    st.markdown("### 📊 Sentiment Analysis Results")
+                    
+                    # Clean text
+                    cleaned_text = clean_text(full_text)
+                    
+                    if not cleaned_text.strip():
+                        st.warning("No valid text found after cleaning. Cannot analyze sentiment.")
+                    else:
+                        # Get predictions
+                        if ensure_model_ui():
+                            # Call the new FastAPI backend seamlessly
+                            pred_int = predict_sentiment([cleaned_text])[0]
+                            sentiment_label = labels[pred_int]
+                            probas = predict_proba_sentiment([cleaned_text])[0]
+                            confidence = probas.max() * 100
+                            
+                            # Display results
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Sentiment", sentiment_label)
+                            with col2:
+                                st.metric("Confidence", f"{confidence:.1f}%")
+                            with col3:
+                                # Color code based on sentiment
+                                if sentiment_label == "Positive":
+                                    st.success("✅ Positive")
+                                elif sentiment_label == "Negative":
+                                    st.error("❌ Negative")
+                                else:
+                                    st.info("➖ Neutral")
+                            
+                            # Probability breakdown
+                            st.markdown("#### Probability Breakdown")
+                            prob_df = pd.DataFrame({
+                                "Sentiment": ["Negative", "Neutral", "Positive"],
+                                "Probability": [f"{probas[0]*100:.1f}%", f"{probas[1]*100:.1f}%", f"{probas[2]*100:.1f}%"]
+                            })
+                            st.dataframe(prob_df, use_container_width=True, hide_index=True)
+                            
+                            # Visual indicator
+                            if confidence > 80:
+                                st.success(f"✅ High confidence prediction ({confidence:.1f}%)")
+                            elif confidence > 60:
+                                st.info(f"⚠️ Moderate confidence prediction ({confidence:.1f}%)")
+                            else:
+                                st.warning(f"⚠️ Low confidence prediction ({confidence:.1f}%) - results may be unreliable")
+                            
+                            # Analyze individual segments if multiple
+                            if len(extracted_texts) > 1:
+                                st.markdown("---")
+                                st.markdown("### 📊 Individual Segment Analysis")
+                                
+                                segment_results = []
+                                for i, text_segment in enumerate(extracted_texts, 1):
+                                    cleaned_segment = clean_text(text_segment)
+                                    if cleaned_segment.strip():
+                                        seg_pred_int = predict_sentiment([cleaned_segment])[0]
+                                        seg_label = labels[seg_pred_int]
+                                        segment_results.append({
+                                            "Segment": i,
+                                            "Text": text_segment[:100] + "..." if len(text_segment) > 100 else text_segment,
+                                            "Sentiment": seg_label
+                                        })
+                                
+                                if segment_results:
+                                    segment_df = pd.DataFrame(segment_results)
+                                    st.dataframe(segment_df, use_container_width=True, hide_index=True)
+                                    
+                                    # Segment sentiment distribution
+                                    st.markdown("#### Segment Sentiment Distribution")
+                                    seg_counts = segment_df["Sentiment"].value_counts()
+                                    if not seg_counts.empty:
+                                        st.bar_chart(seg_counts)
+                        else:
+                            st.warning("Backend API unreachable.")
+                
+                # Download results (only if analysis was performed)
+                if full_text.strip():
+                    st.markdown("---")
+                    st.markdown("### 💾 Download Results")
+                    try:
+                        results_data = {
+                            "extracted_text": [full_text],
+                            "sentiment": [sentiment_label],
+                            "confidence": [f"{confidence:.1f}%"]
+                        }
+                        results_df = pd.DataFrame(results_data)
+                        csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+                        st.download_button(
+                            "Download results as CSV",
+                            data=csv_bytes,
+                            file_name="image_sentiment_results.csv",
+                            mime="text/csv",
+                            key="download_image_results"
+                        )
+                    except NameError:
+                        # Variables not defined (analysis didn't complete)
+                        pass
+
+elif mode == "Manual Text Input":
+    # Ensure model UI is set up (will try to load transformer)
+    ensure_model_ui()
+
+    text = st.text_area("Enter text:")
+    if st.button("Analyze Text"):
+        if text.strip():
+            cleaned = clean_text(text)
+            
+            # Get predictions and probabilities using helper function
+            probas = predict_proba_sentiment([cleaned])[0]
+            
+            pred = probas.argmax()
+            confidence = probas.max() * 100
+            
+            # Show result with confidence
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Sentiment", labels[pred])  # type: ignore
+            with col2:
+                st.metric("Confidence", f"{confidence:.1f}%")
+            
+            # Show probability breakdown
+            st.markdown("**Probability Breakdown:**")
+            prob_df = pd.DataFrame({
+                "Sentiment": ["Negative", "Neutral", "Positive"],
+                "Probability": [f"{probas[0]*100:.1f}%", f"{probas[1]*100:.1f}%", f"{probas[2]*100:.1f}%"]
+            })
+            st.dataframe(prob_df, use_container_width=True, hide_index=True)
+            
+            # Visual indicator
+            if confidence > 80:
+                st.success(f"✅ High confidence prediction")
+            elif confidence > 60:
+                st.info(f"⚠️ Moderate confidence prediction")
+            else:
+                st.warning(f"⚠️ Low confidence prediction - results may be unreliable")
+
+# ----------- Mode 6: Prediction History (Database) -----------
+elif mode == "Prediction History (Database)":
+    st.subheader("🗄️ Prediction History (Database)")
+    st.markdown("View the history of all texts analyzed by the system, saved automatically in our local SQLite database.")
+    
+    try:
+        response = requests.get("http://127.0.0.1:8000/history?limit=100", timeout=10)
+        if response.status_code == 200:
+            history = response.json()
+            if not history:
+                st.info("No predictions found in the database yet. Try analyzing some text!")
+            else:
+                df_history = pd.DataFrame(history)
+                # If emotion exists in the database response, add it to the view
+                columns_to_show = ["id", "timestamp", "sentiment"]
+                if "emotion" in df_history.columns:
+                    columns_to_show.append("emotion")
+                columns_to_show.append("text")
+                st.dataframe(df_history[columns_to_show], use_container_width=True, hide_index=True)
+                
+                # Show quick pie chart of historical counts
+                st.markdown("### 📊 Historical Analytics")
+                import plotly.express as px
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    counts = df_history["sentiment"].value_counts().reset_index()
+                    counts.columns = ["sentiment", "count"]
+                    fig = px.pie(counts, values='count', names='sentiment', title='Sentiment Distribution', color='sentiment', color_discrete_map={'Positive':'#2ecc71','Neutral':'#f1c40f','Negative':'#e74c3c'})
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    if "emotion" in df_history.columns:
+                        em_counts = df_history["emotion"].value_counts().reset_index()
+                        em_counts.columns = ["emotion", "count"]
                         fig_em = px.pie(em_counts, values='count', names='emotion', hole=0.3, title='Emotion Distribution', color_discrete_sequence=px.colors.qualitative.Pastel)
                         st.plotly_chart(fig_em, use_container_width=True)
         else:
@@ -1454,6 +1649,15 @@ elif mode == "Train Custom Model":
                             st.info(f"Train size: {len(train_texts)} | Test size: {len(test_texts)}")
                             
                             st.info("Loading RoBERTa tokenizer...")
+                            try:
+                                import transformers
+                            except ImportError:
+                                st.warning("Required AI libraries are not installed in the current environment. Installing them automatically... (This may take a minute)")
+                                import sys, subprocess
+                                subprocess.check_call([sys.executable, "-m", "pip", "install", "transformers", "torch", "accelerate"])
+                                import site, importlib
+                                importlib.reload(site)
+                                importlib.invalidate_caches()
                             from transformers import RobertaTokenizer, RobertaForSequenceClassification, Trainer, TrainingArguments
                             from torch.utils.data import Dataset
                             import torch
@@ -1520,4 +1724,7 @@ elif mode == "Train Custom Model":
                             st.success("Model saved to ./custom_roberta_model directory!")
                             
                     except Exception as e:
+                        import sys
                         st.error(f"Error during training: {e}")
+                        st.error(f"Debug Info: Python Executable: {sys.executable}")
+                        st.error(f"Debug Info: Python Path: {sys.path}")
