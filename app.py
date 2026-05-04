@@ -535,7 +535,8 @@ mode = st.sidebar.selectbox(
         "Analyze Dataset",
         "Analyze Image/Screenshot",
         "Manual Text Input",
-        "Prediction History (Database)"
+        "Prediction History (Database)",
+        "Train Custom Model"
     ],
     key="mode_selectbox"
 )
@@ -1407,4 +1408,116 @@ elif mode == "Prediction History (Database)":
     except Exception as e:
         st.error(f"Database unreachable. Please ensure FastAPI server is running. Error: {e}")
 # ----------- Mode 7: Train Custom Model -----------
+elif mode == "Train Custom Model":
+    st.subheader("🛠️ Train Custom Model (Fine-tune RoBERTa)")
+    st.markdown("Upload a CSV dataset with `text` and `label` columns to fine-tune a RoBERTa model.")
+    
+    uploaded_file = st.file_uploader("Upload training dataset (CSV)", type=["csv"], key="train_uploader")
+    if uploaded_file is not None:
+        df, header_row = read_csv_with_header_detection(uploaded_file)
+        if df is not None:
+            st.success(f"✅ Dataset loaded successfully: {len(df)} rows")
+            cols = list(df.columns)
+            text_col = detect_text_column(df, exclude_numerical=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                t_idx = cols.index(text_col) if text_col in cols else 0
+                selected_text = st.selectbox("Text Column", options=cols, index=t_idx, key="train_text")
+            with col2:
+                label_options = cols
+                s_idx = 1 if len(cols) > 1 else 0
+                selected_label = st.selectbox("Label Column", options=label_options, index=s_idx, key="train_label")
+                
+            if st.button("Start Fine-Tuning"):
+                with st.spinner("Preparing data and model (this will take time)..."):
+                    try:
+                        texts = df[selected_text].astype(str).tolist()
+                        
+                        labels_list = [map_sentiment_label(lbl) for lbl in df[selected_label]]
+                        valid_data = [(t, l) for t, l in zip(texts, labels_list) if l in ["Negative", "Neutral", "Positive"]]
+                        
+                        if not valid_data:
+                            st.error("No valid labels found. Labels must map to Negative, Neutral, or Positive.")
+                        else:
+                            X = [d[0] for d in valid_data]
+                            y = [d[1] for d in valid_data]
+                            label_mapping = {"Negative": 0, "Neutral": 1, "Positive": 2}
+                            y_num = [label_mapping[lbl] for lbl in y]
+                            
+                            st.info("Splitting dataset into 70% training and 30% testing...")
+                            from sklearn.model_selection import train_test_split
+                            train_texts, test_texts, train_labels, test_labels = train_test_split(
+                                X, y_num, test_size=0.3, random_state=42
+                            )
+                            
+                            st.info(f"Train size: {len(train_texts)} | Test size: {len(test_texts)}")
+                            
+                            st.info("Loading RoBERTa tokenizer...")
+                            from transformers import RobertaTokenizer, RobertaForSequenceClassification, Trainer, TrainingArguments
+                            from torch.utils.data import Dataset
+                            import torch
+                            
+                            tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+                            
+                            class CustomDataset(Dataset):
+                                def __init__(self, encodings, labels):
+                                    self.encodings = encodings
+                                    self.labels = labels
+                                def __getitem__(self, idx):
+                                    item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+                                    item['labels'] = torch.tensor(self.labels[idx])
+                                    return item
+                                def __len__(self):
+                                    return len(self.labels)
 
+                            train_encodings = tokenizer(train_texts, truncation=True, padding=True, max_length=128)
+                            test_encodings = tokenizer(test_texts, truncation=True, padding=True, max_length=128)
+                            
+                            train_dataset = CustomDataset(train_encodings, train_labels)
+                            test_dataset = CustomDataset(test_encodings, test_labels)
+                            
+                            st.info("Loading RoBERTa model...")
+                            model = RobertaForSequenceClassification.from_pretrained('roberta-base', num_labels=3)
+                            
+                            training_args = TrainingArguments(
+                                output_dir='./results',
+                                num_train_epochs=3,
+                                per_device_train_batch_size=8,
+                                per_device_eval_batch_size=8,
+                                evaluation_strategy="epoch",
+                                save_strategy="epoch",
+                                logging_steps=10,
+                                load_best_model_at_end=True,
+                            )
+                            
+                            from sklearn.metrics import accuracy_score
+                            import numpy as np
+                            def compute_metrics(eval_pred):
+                                logits, labels = eval_pred
+                                predictions = np.argmax(logits, axis=-1)
+                                return {"accuracy": accuracy_score(labels, predictions)}
+                            
+                            trainer = Trainer(
+                                model=model,
+                                args=training_args,
+                                train_dataset=train_dataset,
+                                eval_dataset=test_dataset,
+                                compute_metrics=compute_metrics
+                            )
+                            
+                            st.info("Starting training...")
+                            trainer.train()
+                            
+                            st.success("Training completed!")
+                            
+                            st.info("Evaluating on 30% test set...")
+                            eval_results = trainer.evaluate()
+                            st.write(eval_results)
+                            
+                            trainer.save_model("./custom_roberta_model")
+                            tokenizer.save_pretrained("./custom_roberta_model")
+                            st.success("Model saved to ./custom_roberta_model directory!")
+                            
+                    except Exception as e:
+                        st.error(f"Error during training: {e}")
