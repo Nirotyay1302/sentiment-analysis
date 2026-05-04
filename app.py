@@ -1494,7 +1494,7 @@ elif mode == "Train Custom Model":
                                 num_train_epochs=3,
                                 per_device_train_batch_size=8,
                                 per_device_eval_batch_size=8,
-                                evaluation_strategy="epoch",
+                                eval_strategy="epoch",
                                 save_strategy="epoch",
                                 logging_steps=10,
                                 load_best_model_at_end=True,
