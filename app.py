@@ -545,8 +545,7 @@ mode = st.sidebar.selectbox(
         "Analyze Dataset",
         "Analyze Image/Screenshot",
         "Manual Text Input",
-        "Prediction History (Database)",
-        "Model Info"
+        "Prediction History (Database)"
     ],
     key="mode_selectbox"
 )
@@ -1105,10 +1104,12 @@ if mode == "Analyze Dataset":
                                 st.markdown("**Actual**")
                                 actual_counts = pd.Series(y_actual).value_counts().reindex(["Negative", "Neutral", "Positive"], fill_value=0)
                                 st.bar_chart(actual_counts, color="#10b981")
+                                render_pie_chart(actual_counts, title="Actual Sentiment Distribution", colors=["#e74c3c", "#f1c40f", "#2ecc71"])
                             with col_b:
                                 st.markdown("**Predicted**")
                                 pred_counts = pd.Series(y_pred_text).value_counts().reindex(["Negative", "Neutral", "Positive"], fill_value=0)
                                 st.bar_chart(pred_counts, color="#3b82f6")
+                                render_pie_chart(pred_counts, title="Predicted Sentiment Distribution", colors=["#e74c3c", "#f1c40f", "#2ecc71"])
                             
                             # Visualizations
                             st.markdown("### Performance Visualizations")
@@ -1484,62 +1485,4 @@ elif mode == "Prediction History (Database)":
             st.error(f"Failed to fetch history: {response.text}")
     except Exception as e:
         st.error(f"Database unreachable. Please ensure FastAPI server is running. Error: {e}")
-# ----------- Mode 5: Pre-Trained Model Info -----------
-elif mode == "Model Info":
-    st.subheader("🤖 Pre-Trained Sentiment Model")
-    st.markdown("A sentiment model has already been trained on the custom dataset (Positive, Negative, Neutral) with 70-30 train-test split.")
-    
-    # Load metrics if available
-    metrics_path = os.path.join(os.path.dirname(__file__), "model_metrics.json")
-    if os.path.exists(metrics_path):
-        try:
-            import json
-            with open(metrics_path) as f:
-                metrics = json.load(f)
-            
-            st.markdown("### Model Performance")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Test Accuracy", f"{metrics.get('test_accuracy', 0)*100:.1f}%")
-            with col2:
-                st.metric("F1 Score (Weighted)", f"{metrics.get('test_f1_weighted', 0)*100:.1f}%")
-            with col3:
-                st.metric("Training Samples", metrics.get('train_size', 0))
-            
-            st.markdown("### Training Details")
-            st.info(f"**Dataset:** {metrics.get('dataset', 'Custom Dataset')}  \n**Split:** {metrics.get('split_ratio', '70-30')}  \n**Model:** {metrics.get('model', 'TF-IDF + Classifier')}")
-            
-            if 'label_distribution' in metrics:
-                st.markdown("### Label Distribution")
-                dist_df = pd.DataFrame.from_dict(metrics['label_distribution'], orient='index', columns=['Count'])
-                st.bar_chart(dist_df)
-        except:
-            st.info("Model is trained and ready for predictions.")
-    else:
-        st.info("Model is trained and ready for predictions.")
-    
-    st.markdown("---")
-    st.markdown("### Test the Model")
-    test_text = st.text_area("Enter text to test:", key="test_model_text")
-    if st.button("Test Prediction", key="test_pred_btn"):
-        if test_text.strip():
-            cleaned = clean_text(test_text)
-            probas = predict_proba_sentiment([cleaned])[0]
-            pred_idx = probas.argmax()
-            confidence = probas.max() * 100
-            
-            labels = {0: "Negative", 1: "Neutral", 2: "Positive"}
-            sentiment = labels[pred_idx]
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Sentiment", sentiment)
-            with col2:
-                st.metric("Confidence", f"{confidence:.1f}%")
-            
-            st.markdown("**Probability Breakdown:**")
-            prob_df = pd.DataFrame({
-                "Sentiment": ["Negative", "Neutral", "Positive"],
-                "Probability": [f"{probas[0]*100:.1f}%", f"{probas[1]*100:.1f}%", f"{probas[2]*100:.1f}%"]
-            })
-            st.dataframe(prob_df, use_container_width=True, hide_index=True)
+
