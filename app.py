@@ -546,7 +546,7 @@ mode = st.sidebar.selectbox(
         "Analyze Image/Screenshot",
         "Manual Text Input",
         "Prediction History (Database)",
-        "Train Custom Model"
+        "Model Info"
     ],
     key="mode_selectbox"
 )
@@ -565,25 +565,6 @@ try:
 except:
     st.sidebar.error("❌ Backend Offline")
     st.sidebar.caption("Please start the FastAPI server on port 8000")
-
-# Show model status
-st.sidebar.markdown("---")
-st.sidebar.header("🤖 Model Status")
-model_path = os.path.join(os.path.dirname(__file__), "model.joblib")
-if os.path.exists(model_path):
-    st.sidebar.success("✅ Custom Model Loaded")
-    metrics_path = os.path.join(os.path.dirname(__file__), "model_metrics.json")
-    if os.path.exists(metrics_path):
-        try:
-            import json
-            with open(metrics_path) as f:
-                metrics = json.load(f)
-            st.sidebar.caption(f"Accuracy: {metrics.get('validation_accuracy', 0)*100:.1f}%<br>Samples: {metrics.get('training_samples', 0)}", unsafe_allow_html=True)
-        except:
-            st.sidebar.caption("Model ready for predictions")
-else:
-    st.sidebar.warning("⚠️ No Custom Model")
-    st.sidebar.caption("Train a model or use default")
 
 # Add OCR Info section
 st.sidebar.markdown("---")
@@ -1002,6 +983,14 @@ if mode == "Analyze Dataset":
                     sentiment_col = c
                     break
             
+            # Determine if dataset has valid sentiment labels
+            has_labels = False
+            if sentiment_col:
+                sample_labels = df[sentiment_col].dropna().astype(str).head(100).tolist()
+                mapped_sample = [map_sentiment_label(l) for l in sample_labels]
+                valid_pct = sum(1 for m in mapped_sample if m in ['Negative', 'Neutral', 'Positive']) / len(sample_labels) * 100
+                has_labels = valid_pct > 50
+            
             st.markdown("### Select Columns")
             col1, col2 = st.columns(2)
             with col1:
@@ -1009,8 +998,18 @@ if mode == "Analyze Dataset":
                 selected_text = st.selectbox("Text Column", options=cols, index=t_idx, key="data_text")
             with col2:
                 label_options = ["None (Predict Only)"] + cols
-                s_idx = label_options.index(sentiment_col) if sentiment_col in label_options else 0
-                selected_label = st.selectbox("Label Column (or 'None' for prediction)", options=label_options, index=s_idx, key="data_label")
+                # Default to "None" if no valid labels detected, otherwise default to sentiment column
+                if has_labels and sentiment_col:
+                    s_idx = label_options.index(sentiment_col)
+                else:
+                    s_idx = 0  # Default to "None (Predict Only)"
+                selected_label = st.selectbox("Label Column (select 'None' if dataset has no labels)", options=label_options, index=s_idx, key="data_label")
+            
+            # Show mode indicator
+            if selected_label != "None (Predict Only)":
+                st.info("📊 **Evaluation Mode**: Comparing model predictions against actual labels in your dataset.")
+            else:
+                st.info("📝 **Prediction Mode**: No labels in dataset. Model will predict sentiments for all texts.")
                 
             st.markdown("### Preview")
             if selected_label != "None (Predict Only)":
@@ -1173,7 +1172,7 @@ if mode == "Analyze Dataset":
                             st.error(f"Analysis failed: {e}")
                             st.code(traceback.format_exc())
                 else:
-                    # --- PREDICTION ONLY MODE: No labels ---
+                    # --- PREDICTION ONLY MODE: No labels in dataset ---
                     with st.spinner("Predicting sentiments..."):
                         try:
                             texts = [clean_text(t) for t in raw_texts if clean_text(t).strip()]
@@ -1199,22 +1198,39 @@ if mode == "Analyze Dataset":
                             num_to_label = {0: "Negative", 1: "Neutral", 2: "Positive"}
                             pred_labels = [num_to_label.get(p, "Neutral") for p in preds]
                             
+                            # Results display - NO Actual Sentiment section
                             st.markdown("---")
                             st.markdown("## 📊 Prediction Results")
+                            st.info("📝 **Prediction Mode**: Dataset has no sentiment labels. Showing only model predictions.")
                             
                             counts = pd.Series(pred_labels).value_counts()
-                            col1, col2 = st.columns(2)
+                            col1, col2, col3 = st.columns(3)
                             with col1:
                                 st.metric("Total Analyzed", len(texts))
-                                st.bar_chart(counts, color="#3b82f6")
                             with col2:
+                                pos_count = sum(1 for p in pred_labels if p == "Positive")
+                                st.metric("Positive", pos_count)
+                            with col3:
+                                neg_count = sum(1 for p in pred_labels if p == "Negative")
+                                st.metric("Negative", neg_count)
+                            
+                            st.markdown("### Predicted Sentiment Distribution")
+                            col_a, col_b = st.columns(2)
+                            with col_a:
+                                st.bar_chart(counts, color="#3b82f6")
+                            with col_b:
                                 render_pie_chart(counts, title="Sentiment Distribution")
                             
-                            results_df = pd.DataFrame({"Text": texts, "Predicted_Sentiment": pred_labels})
+                            # Results table - ONLY Text and Predicted_Sentiment
+                            results_df = pd.DataFrame({
+                                "Text": texts, 
+                                "Predicted_Sentiment": pred_labels
+                            })
+                            st.markdown("### Predictions")
                             st.dataframe(results_df.head(50), use_container_width=True)
                             
                             csv_bytes = results_df.to_csv(index=False).encode("utf-8")
-                            st.download_button("Download Predictions (CSV)", data=csv_bytes, file_name="predictions.csv", mime="text/csv")
+                            st.download_button("Download Predictions (CSV)", data=csv_bytes, file_name="sentiment_predictions.csv", mime="text/csv")
                         except Exception as e:
                             st.error(f"Prediction failed: {e}")
 
@@ -1468,261 +1484,62 @@ elif mode == "Prediction History (Database)":
             st.error(f"Failed to fetch history: {response.text}")
     except Exception as e:
         st.error(f"Database unreachable. Please ensure FastAPI server is running. Error: {e}")
-# ----------- Mode 5: Train Custom Model -----------
-elif mode == "Train Custom Model":
-    st.subheader("🛠️ Train Custom Sentiment Model")
-    st.markdown("Upload a labeled CSV dataset to train a high-accuracy sentiment model. The trained model will be used for all predictions.")
+# ----------- Mode 5: Pre-Trained Model Info -----------
+elif mode == "Model Info":
+    st.subheader("🤖 Pre-Trained Sentiment Model")
+    st.markdown("A sentiment model has already been trained on the custom dataset (Positive, Negative, Neutral) with 70-30 train-test split.")
     
-    uploaded_file = st.file_uploader("Upload training dataset (CSV)", type=["csv", "xlsx", "xls"], key="train_uploader")
-    if uploaded_file is not None:
-        df, header_row = read_csv_with_header_detection(uploaded_file)
-        if df is not None:
-            st.success(f"✅ Dataset loaded: {len(df)} rows")
-            cols = list(df.columns)
-            text_col = detect_text_column(df, exclude_numerical=True)
+    # Load metrics if available
+    metrics_path = os.path.join(os.path.dirname(__file__), "model_metrics.json")
+    if os.path.exists(metrics_path):
+        try:
+            import json
+            with open(metrics_path) as f:
+                metrics = json.load(f)
+            
+            st.markdown("### Model Performance")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Test Accuracy", f"{metrics.get('test_accuracy', 0)*100:.1f}%")
+            with col2:
+                st.metric("F1 Score (Weighted)", f"{metrics.get('test_f1_weighted', 0)*100:.1f}%")
+            with col3:
+                st.metric("Training Samples", metrics.get('train_size', 0))
+            
+            st.markdown("### Training Details")
+            st.info(f"**Dataset:** {metrics.get('dataset', 'Custom Dataset')}  \n**Split:** {metrics.get('split_ratio', '70-30')}  \n**Model:** {metrics.get('model', 'TF-IDF + Classifier')}")
+            
+            if 'label_distribution' in metrics:
+                st.markdown("### Label Distribution")
+                dist_df = pd.DataFrame.from_dict(metrics['label_distribution'], orient='index', columns=['Count'])
+                st.bar_chart(dist_df)
+        except:
+            st.info("Model is trained and ready for predictions.")
+    else:
+        st.info("Model is trained and ready for predictions.")
+    
+    st.markdown("---")
+    st.markdown("### Test the Model")
+    test_text = st.text_area("Enter text to test:", key="test_model_text")
+    if st.button("Test Prediction", key="test_pred_btn"):
+        if test_text.strip():
+            cleaned = clean_text(test_text)
+            probas = predict_proba_sentiment([cleaned])[0]
+            pred_idx = probas.argmax()
+            confidence = probas.max() * 100
+            
+            labels = {0: "Negative", 1: "Neutral", 2: "Positive"}
+            sentiment = labels[pred_idx]
             
             col1, col2 = st.columns(2)
             with col1:
-                t_idx = cols.index(text_col) if text_col in cols else 0
-                selected_text = st.selectbox("Text Column", options=cols, index=t_idx, key="train_text")
+                st.metric("Sentiment", sentiment)
             with col2:
-                label_options = cols
-                s_idx = 1 if len(cols) > 1 else 0
-                selected_label = st.selectbox("Label Column", options=label_options, index=s_idx, key="train_label")
+                st.metric("Confidence", f"{confidence:.1f}%")
             
-            # Training options
-            st.markdown("### Training Options")
-            training_method = st.radio(
-                "Algorithm",
-                ["Fast (TF-IDF + Logistic Regression/XGBoost)", "Advanced (RoBERTa Transformer)"],
-                key="training_method"
-            )
-            
-            if training_method == "Fast (TF-IDF + Logistic Regression/XGBoost)":
-                col_opt1, col_opt2 = st.columns(2)
-                with col_opt1:
-                    n_iter = st.slider("Search Iterations", 10, 100, 30, help="More iterations = better accuracy but slower")
-                with col_opt2:
-                    use_upsample = st.checkbox("Balance Classes (Upsample)", value=True, help="Balances class distribution")
-            else:
-                col_opt1, col_opt2 = st.columns(2)
-                with col_opt1:
-                    epochs = st.slider("Training Epochs", 1, 10, 3)
-                with col_opt2:
-                    batch_size = st.selectbox("Batch Size", [4, 8, 16, 32], index=0)
-            
-            # Preview data
-            if st.checkbox("Preview data distribution"):
-                mapped = [map_sentiment_label(lbl) for lbl in df[selected_label]]
-                dist = pd.Series(mapped).value_counts()
-                st.bar_chart(dist)
-                st.info(f"Valid samples: {sum(1 for m in mapped if m in ['Negative', 'Neutral', 'Positive'])}")
-            
-            if st.button("🚀 Start Training", type="primary"):
-                with st.spinner("Preparing training data..."):
-                    try:
-                        # Prepare data
-                        texts = df[selected_text].astype(str).tolist()
-                        labels_list = [map_sentiment_label(lbl) for lbl in df[selected_label]]
-                        
-                        valid_data = []
-                        for t, l in zip(texts, labels_list):
-                            cleaned = clean_text(t)
-                            if cleaned.strip() and l in ["Negative", "Neutral", "Positive"]:
-                                valid_data.append((cleaned, l))
-                        
-                        if len(valid_data) < 50:
-                            st.error(f"Not enough valid samples ({len(valid_data)}). Need at least 50.")
-                            st.stop()
-                        
-                        X = [d[0] for d in valid_data]
-                        y_str = [d[1] for d in valid_data]
-                        label_mapping = {"Negative": 0, "Neutral": 1, "Positive": 2}
-                        y_num = [label_mapping[lbl] for lbl in y_str]
-                        
-                        st.info(f"Training samples: {len(X)}")
-                        dist = pd.Series(y_str).value_counts()
-                        st.bar_chart(dist)
-                        
-                        if training_method == "Fast (TF-IDF + Logistic Regression/XGBoost)":
-                            # Save temp CSV and run training script
-                            temp_df = pd.DataFrame({"text": X, "label": y_num})
-                            temp_csv = os.path.join(os.path.dirname(__file__), "temp_train.csv")
-                            temp_df.to_csv(temp_csv, index=False)
-                            
-                            model_output = os.path.join(os.path.dirname(__file__), "model.joblib")
-                            train_script = os.path.join(os.path.dirname(__file__), "train_custom_model.py")
-                            
-                            cmd = [
-                                sys.executable, train_script,
-                                "--data", temp_csv,
-                                "--text-col", "text",
-                                "--label-col", "label",
-                                "--output", model_output,
-                                "--n-iter", str(n_iter)
-                            ]
-                            if use_upsample:
-                                cmd.append("--no-upsample")  # Actually we want upsampling, so don't add this
-                                cmd = [c for c in cmd if c != "--no-upsample"]
-                            
-                            st.info("Training in progress...")
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
-                            
-                            process = subprocess.Popen(
-                                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, cwd=os.path.dirname(__file__)
-                            )
-                            
-                            import time
-                            start = time.time()
-                            while process.poll() is None:
-                                elapsed = time.time() - start
-                                progress_bar.progress(min(0.95, elapsed / 180))
-                                status_text.text(f"Training... {elapsed:.0f}s")
-                                time.sleep(2)
-                            
-                            progress_bar.progress(1.0)
-                            
-                            if os.path.exists(temp_csv):
-                                os.remove(temp_csv)
-                            
-                            if process.returncode == 0 and os.path.exists(model_output):
-                                st.success("✅ Training Complete!")
-                                
-                                # Evaluate on held-out set
-                                from sklearn.model_selection import train_test_split
-                                from sklearn.metrics import accuracy_score, classification_report, f1_score, confusion_matrix
-                                import matplotlib.pyplot as plt
-                                import seaborn as sns
-                                
-                                X_train, X_test, y_train, y_test = train_test_split(
-                                    X, y_num, test_size=0.2, random_state=42, stratify=y_num
-                                )
-                                
-                                model = joblib.load(model_output)
-                                y_pred = model.predict(X_test)
-                                
-                                acc = accuracy_score(y_test, y_pred)
-                                f1 = f1_score(y_test, y_pred, average='weighted')
-                                
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.metric("Test Accuracy", f"{acc*100:.1f}%")
-                                with col2:
-                                    st.metric("F1 Score", f"{f1*100:.1f}%")
-                                
-                                st.markdown("### Classification Report")
-                                try:
-                                    report = classification_report(y_test, y_pred, target_names=["Negative", "Neutral", "Positive"])
-                                    st.code(report)
-                                except:
-                                    pass
-                                
-                                st.markdown("### Confusion Matrix")
-                                cm = confusion_matrix(y_test, y_pred)
-                                fig, ax = plt.subplots(figsize=(5, 4))
-                                sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                                            xticklabels=["Negative", "Neutral", "Positive"],
-                                            yticklabels=["Negative", "Neutral", "Positive"])
-                                ax.set_ylabel('Actual')
-                                ax.set_xlabel('Predicted')
-                                st.pyplot(fig)
-                                
-                                st.success("Model is now active! All predictions will use this custom model.")
-                            else:
-                                st.error("Training failed.")
-                        
-                        else:
-                            # RoBERTa training
-                            st.info("Loading transformer libraries...")
-                            try:
-                                import transformers
-                            except ImportError:
-                                import subprocess
-                                subprocess.check_call([sys.executable, "-m", "pip", "install", "transformers", "torch", "accelerate", "datasets"])
-                                import site, importlib
-                                importlib.reload(site)
-                            
-                            from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
-                            from datasets import Dataset
-                            import torch
-                            import numpy as np
-                            
-                            X_train, X_test, y_train, y_test = train_test_split(
-                                X, y_num, test_size=0.2, random_state=42, stratify=y_num
-                            )
-                            
-                            st.info(f"Train: {len(X_train)}, Test: {len(X_test)}")
-                            st.info("Loading model...")
-                            
-                            model_name = "cardiffnlp/twitter-roberta-base-sentiment-latest"
-                            tokenizer = AutoTokenizer.from_pretrained(model_name)
-                            
-                            train_ds = Dataset.from_dict({"text": X_train, "label": y_train})
-                            test_ds = Dataset.from_dict({"text": X_test, "label": y_test})
-                            
-                            def preprocess(batch):
-                                return tokenizer(batch["text"], truncation=True, padding="max_length", max_length=128)
-                            
-                            train_ds = train_ds.map(preprocess, batched=True)
-                            test_ds = test_ds.map(preprocess, batched=True)
-                            train_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
-                            test_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
-                            
-                            model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=3)
-                            
-                            def compute_metrics(eval_pred):
-                                logits, labels = eval_pred
-                                preds = np.argmax(logits, axis=-1)
-                                return {"accuracy": accuracy_score(labels, preds),
-                                        "f1": f1_score(labels, preds, average='weighted')}
-                            
-                            training_args = TrainingArguments(
-                                output_dir='./custom_roberta_model',
-                                num_train_epochs=epochs,
-                                per_device_train_batch_size=batch_size,
-                                per_device_eval_batch_size=batch_size,
-                                eval_strategy="epoch",
-                                save_strategy="epoch",
-                                load_best_model_at_end=True,
-                                metric_for_best_model="f1",
-                                learning_rate=2e-5,
-                                weight_decay=0.01,
-                                fp16=torch.cuda.is_available(),
-                                push_to_hub=False,
-                            )
-                            
-                            trainer = Trainer(
-                                model=model, args=training_args,
-                                train_dataset=train_ds, eval_dataset=test_ds,
-                                compute_metrics=compute_metrics,
-                            )
-                            
-                            st.info("Training...")
-                            trainer.train()
-                            
-                            eval_results = trainer.evaluate()
-                            st.success("Training Complete!")
-                            
-                            st.metric("Accuracy", f"{eval_results.get('eval_accuracy', 0)*100:.1f}%")
-                            st.metric("F1 Score", f"{eval_results.get('eval_f1', 0)*100:.1f}%")
-                            
-                            trainer.save_model("./custom_roberta_model")
-                            tokenizer.save_pretrained("./custom_roberta_model")
-                            
-                            # Save wrapper for app
-                            wrapper_path = os.path.join(os.path.dirname(__file__), "model.joblib")
-                            import importlib.util
-                            spec = importlib.util.spec_from_file_location("train_model", os.path.join(os.path.dirname(__file__), "train_model.py"))
-                            train_module = importlib.util.module_from_spec(spec)
-                            spec.loader.exec_module(train_module)
-                            wrapper = train_module.TransformerWrapper("./custom_roberta_model")
-                            joblib.dump(wrapper, wrapper_path)
-                            
-                            st.success("✅ Custom RoBERTa model saved and active!")
-                            
-                    except Exception as e:
-                        import traceback
-                        st.error(f"Training failed: {e}")
-                        st.code(traceback.format_exc())
+            st.markdown("**Probability Breakdown:**")
+            prob_df = pd.DataFrame({
+                "Sentiment": ["Negative", "Neutral", "Positive"],
+                "Probability": [f"{probas[0]*100:.1f}%", f"{probas[1]*100:.1f}%", f"{probas[2]*100:.1f}%"]
+            })
+            st.dataframe(prob_df, use_container_width=True, hide_index=True)
