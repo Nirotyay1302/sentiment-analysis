@@ -8,27 +8,19 @@ matplotlib
 numpy
 xgboost
 wordcloud
-# FastAPI and uvicorn (Backend API)
 fastapi
 uvicorn
 python-multipart
 sqlalchemy
-# transformers>=4.30.0
-# torch>=2.0.0
 pytesseract
 Pillow>=9.0.0
-# easyocr>=1.7.0
-# Optional dependencies (may not work on all platforms)
-# snscrape  # Twitter scraping - archived library, may not work on Python 3.13+
-# youtube-comment-downloader  # YouTube scraping - may have compatibility issues
-# datasets
 scipy
 regex
 tqdm
 accelerate
 transformers
 torch
-
-
 seaborn
 openpyxl
+datasets
+
