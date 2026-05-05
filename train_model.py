@@ -222,7 +222,6 @@ def build_pipeline(use_xgboost=True, xgb_params=None):
         clf = LogisticRegression(
             max_iter=2000,
             random_state=42,
-            multi_class='multinomial',
             solver='lbfgs'
         )
     pipeline = Pipeline([

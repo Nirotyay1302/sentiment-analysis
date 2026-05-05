@@ -21,13 +21,26 @@ class TransformerSentimentModel:
     """Wrapper class for transformer-based sentiment analysis."""
     
     def __init__(self, model_name="cardiffnlp/twitter-roberta-base-sentiment-latest"):
-        self.model_name = model_name
+        # Check for custom trained model first
+        custom_model_dir = os.path.join(os.path.dirname(__file__), "..", "custom_roberta_model")
+        if os.path.exists(custom_model_dir) and os.path.isdir(custom_model_dir):
+            # Verify it has the required files
+            if os.path.exists(os.path.join(custom_model_dir, "config.json")):
+                self.model_name = custom_model_dir
+                print(f"Using custom fine-tuned model from: {self.model_name}")
+            else:
+                self.model_name = model_name
+                print(f"Custom model directory incomplete, using default: {model_name}")
+        else:
+            self.model_name = model_name
         self.tokenizer = None
         self.model = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.label_map = {}
+        # Standardized label mapping: ensure consistent order [Negative, Neutral, Positive]
         self.label_to_num = {"Negative": 0, "Neutral": 1, "Positive": 2}
-        self.num_to_label = {}
+        self.num_to_label = {0: "Negative", 1: "Neutral", 2: "Positive"}
+        self.model_label_order = None  # Track the model's actual label order
         self._load_model()
     
     def _load_model(self):
@@ -39,22 +52,22 @@ class TransformerSentimentModel:
             
             if hasattr(self.model.config, 'id2label'):
                 self.label_map = self.model.config.id2label
+                # Build mapping from model's label indices to our standard indices
+                self.model_label_order = []
+                for idx in sorted(self.label_map.keys()):
+                    label_name = self.label_map[idx].lower()
+                    if "neg" in label_name or label_name == "0":
+                        self.model_label_order.append(0)  # Negative
+                    elif "neu" in label_name or label_name == "1":
+                        self.model_label_order.append(1)  # Neutral
+                    elif "pos" in label_name or label_name == "2":
+                        self.model_label_order.append(2)  # Positive
+                    else:
+                        self.model_label_order.append(idx)
+                print(f"Model label order: {self.model_label_order}")
             else:
                 self.label_map = {0: "LABEL_0", 1: "LABEL_1", 2: "LABEL_2"}
-            
-            for idx, label_name in self.label_map.items():
-                if isinstance(label_name, str):
-                    label_lower = label_name.lower()
-                    if "neg" in label_lower:
-                        self.num_to_label[idx] = 0
-                    elif "neu" in label_lower or "neutral" in label_lower:
-                        self.num_to_label[idx] = 1
-                    elif "pos" in label_lower:
-                        self.num_to_label[idx] = 2
-                    else:
-                        self.num_to_label[idx] = idx
-                else:
-                    self.num_to_label[idx] = idx
+                self.model_label_order = [0, 1, 2]
         except Exception as e:
             raise RuntimeError(f"Failed to load transformer model: {e}")
     
@@ -79,7 +92,18 @@ class TransformerSentimentModel:
                 predicted_labels = predictions.argmax(dim=-1)
             
             predicted_labels = predicted_labels.cpu().numpy()
-            results = [self.num_to_label.get(int(idx), 1) for idx in predicted_labels]
+            # Map model's predictions to our standard label indices
+            results = []
+            for idx in predicted_labels:
+                if self.model_label_order:
+                    # Use the model's label order mapping
+                    model_idx = int(idx)
+                    if 0 <= model_idx < len(self.model_label_order):
+                        results.append(self.model_label_order[model_idx])
+                    else:
+                        results.append(1)  # Default to Neutral
+                else:
+                    results.append(self.num_to_label.get(int(idx), 1))
             return results
         except Exception:
             return [1] * len(texts)
@@ -104,10 +128,11 @@ class TransformerSentimentModel:
                 probabilities = torch.nn.functional.softmax(outputs.logits, dim=-1)
             
             probs = probabilities.cpu().numpy()
+            # Reorder probabilities to match our standard [Negative, Neutral, Positive] order
             reordered_probs = np.zeros((len(texts), 3))
             for i in range(len(texts)):
-                for model_idx in range(len(probs[i])):
-                    our_idx = self.num_to_label.get(model_idx, 1)
+                for model_idx in range(min(len(probs[i]), len(self.model_label_order))):
+                    our_idx = self.model_label_order[model_idx] if self.model_label_order else model_idx
                     if 0 <= our_idx < 3:
                         reordered_probs[i][our_idx] = probs[i][model_idx]
             return reordered_probs
